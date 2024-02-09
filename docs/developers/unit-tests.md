@@ -1,54 +1,29 @@
-## Unit tests
+# Unit tests
 
-Project unit tests use [JUnit](https://junit.org) as a main testing framework. 
-Also used [AssertJ](http://joel-costigliola.github.io/assertj) for checking assertions 
-and [Mockito](http://mockito.org) for mocking objects.
+## Run unit tests
 
-In general, for testing the behavior of some class use the following rules:
-- check instance creation of tested object (if non-static)
-- check all negative scenarios with possible exceptions
-- check all positive scenarios
-
-Writing the unit tests considers [Given-When-Then](https://martinfowler.com/bliki/GivenWhenThen.html) style.
-For example:
+### Run all tests
 
 ```
-@Test
-public void someTest() {
-    // given
-    int a = 2;
-    int b = 2;
-    
-    // when
-    int c = a + b;
-    
-    // then
-    assertThat(c).isEqualTo(4);
-}
+mvn test
 ```
 
-It is preferable to use fluent assertions:
-```
-assertThat(result)
-    .isNotNull()
-    .extracting(r -> r.errors).isEmpty();
-```
+### Run a single test file
 
-Unit tests can use static method imports, like:
 ```
-import static java.util.Collections.emptyList;
-
-//...
-
-someService.perform(emptyList());
+mvn test -Dtest=GenericBidderTest
 ```
 
-Unit tests can use resources from "src/test/resources" folder.
+### Run a single unit test
 
-In case your business logic uses JSON manipulation, unit tests must be inherited from `org.prebid.server.VertxTest` class.
-Thus, application preconfigured JSON mapper will be used. 
-
-To run the project unit tests execute:
 ```
-mvn clean test
+mvn test -Dtest=GenericBidderTest#makeHttpRequestsShouldCreateExpectedUrl
+```
+
+### Run a unit test and skip checkstyle
+
+Can be useful for printf-debugging because Checkstyle will fail on `System.out.println`
+
+```
+mvn test -Dtest=GenericBidderTest#makeHttpRequestsShouldCreateExpectedUrl -Dcheckstyle.skip
 ```

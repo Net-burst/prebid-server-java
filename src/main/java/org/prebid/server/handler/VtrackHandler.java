@@ -89,7 +89,7 @@ public class VtrackHandler implements Handler<RoutingContext> {
 
         applicationSettings.getAccountById(accountId, timeout)
                 .recover(exception -> handleAccountExceptionOrFallback(exception, accountId))
-                .setHandler(async -> handleAccountResult(async, routingContext, vtrackPuts, accountId, integration,
+                .onComplete(async -> handleAccountResult(async, routingContext, vtrackPuts, accountId, integration,
                         timeout));
     }
 
@@ -97,7 +97,7 @@ public class VtrackHandler implements Handler<RoutingContext> {
         final String accountId = routingContext.request().getParam(ACCOUNT_PARAMETER);
         if (StringUtils.isEmpty(accountId)) {
             throw new IllegalArgumentException(
-                    String.format("Account '%s' is required query parameter and can't be empty", ACCOUNT_PARAMETER));
+                    "Account '%s' is required query parameter and can't be empty".formatted(ACCOUNT_PARAMETER));
         }
         return accountId;
     }
@@ -153,11 +153,11 @@ public class VtrackHandler implements Handler<RoutingContext> {
     private static Future<Account> handleAccountExceptionOrFallback(Throwable exception, String accountId) {
         return exception instanceof PreBidException
                 ? Future.succeededFuture(Account.builder()
-                    .id(accountId)
-                    .auction(AccountAuctionConfig.builder()
-                            .events(AccountEventsConfig.of(false))
-                            .build())
-                    .build())
+                .id(accountId)
+                .auction(AccountAuctionConfig.builder()
+                        .events(AccountEventsConfig.of(false))
+                        .build())
+                .build())
                 : Future.failedFuture(exception);
     }
 
@@ -172,11 +172,10 @@ public class VtrackHandler implements Handler<RoutingContext> {
             respondWithServerError(routingContext, "Error occurred while fetching account", asyncAccount.cause());
         } else {
             // insert impression tracking if account allows events and bidder allows VAST modification
-            final Account account = asyncAccount.result();
             final Boolean isEventEnabled = accountEventsEnabled(asyncAccount.result());
             final Set<String> allowedBidders = biddersAllowingVastUpdate(vtrackPuts);
             cacheService.cachePutObjects(vtrackPuts, isEventEnabled, allowedBidders, accountId, integration, timeout)
-                    .setHandler(asyncCache -> handleCacheResult(asyncCache, routingContext));
+                    .onComplete(asyncCache -> handleCacheResult(asyncCache, routingContext));
         }
     }
 
@@ -221,7 +220,7 @@ public class VtrackHandler implements Handler<RoutingContext> {
     private static void respondWithServerError(RoutingContext routingContext, String message, Throwable exception) {
         logger.error(message, exception);
         respondWith(routingContext, HttpResponseStatus.INTERNAL_SERVER_ERROR,
-                String.format("%s: %s", message, exception.getMessage()));
+                "%s: %s".formatted(message, exception.getMessage()));
     }
 
     private static void respondWith(RoutingContext routingContext, HttpResponseStatus status, String body) {

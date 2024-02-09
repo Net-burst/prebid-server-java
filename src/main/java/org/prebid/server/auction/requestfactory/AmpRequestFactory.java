@@ -12,9 +12,8 @@ import com.iab.openrtb.request.Regs;
 import com.iab.openrtb.request.Site;
 import com.iab.openrtb.request.User;
 import io.vertx.core.Future;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
 import io.vertx.ext.web.RoutingContext;
+import lombok.Value;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -23,14 +22,16 @@ import org.prebid.server.auction.FpdResolver;
 import org.prebid.server.auction.ImplicitParametersExtractor;
 import org.prebid.server.auction.OrtbTypesResolver;
 import org.prebid.server.auction.PriceGranularity;
-import org.prebid.server.auction.PrivacyEnforcementService;
 import org.prebid.server.auction.StoredRequestProcessor;
-import org.prebid.server.auction.TimeoutResolver;
+import org.prebid.server.auction.gpp.AmpGppService;
 import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.auction.model.ConsentType;
+import org.prebid.server.auction.privacycontextfactory.AmpPrivacyContextFactory;
+import org.prebid.server.auction.versionconverter.BidRequestOrtbVersionConversionManager;
 import org.prebid.server.exception.InvalidRequestException;
 import org.prebid.server.json.JacksonMapper;
 import org.prebid.server.metric.MetricName;
+import org.prebid.server.model.CaseInsensitiveMultiMap;
 import org.prebid.server.model.Endpoint;
 import org.prebid.server.model.HttpRequestContext;
 import org.prebid.server.privacy.ccpa.Ccpa;
@@ -45,16 +46,15 @@ import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidAmp;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidCache;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidCacheBids;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidCacheVastxml;
-import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidChannel;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestTargeting;
 import org.prebid.server.proto.openrtb.ext.request.ExtSite;
 import org.prebid.server.proto.openrtb.ext.request.ExtStoredRequest;
 import org.prebid.server.proto.openrtb.ext.request.ExtUser;
-import org.prebid.server.proto.request.Targeting;
 import org.prebid.server.settings.model.Account;
 import org.prebid.server.util.HttpUtil;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -62,8 +62,6 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 public class AmpRequestFactory {
-
-    private static final Logger logger = LoggerFactory.getLogger(AmpRequestFactory.class);
 
     private static final String TAG_ID_REQUEST_PARAM = "tag_id";
     private static final String TARGETING_REQUEST_PARAM = "targeting";
@@ -78,46 +76,49 @@ public class AmpRequestFactory {
     private static final String SLOT_REQUEST_PARAM = "slot";
     private static final String TIMEOUT_REQUEST_PARAM = "timeout";
     private static final String GDPR_CONSENT_PARAM = "gdpr_consent";
-    private static final String CONSENT_PARAM = "consent_string";
+    private static final String CONSENT_STRING_PARAM = "consent_string";
     private static final String GDPR_APPLIES_PARAM = "gdpr_applies";
     private static final String CONSENT_TYPE_PARAM = "consent_type";
     private static final String ADDTL_CONSENT_PARAM = "addtl_consent";
+    private static final String GPP_SID_PARAM = "gpp_sid";
 
     private static final int NO_LIMIT_SPLIT_MODE = -1;
-    private static final String AMP_CHANNEL = "amp";
     private static final String ENDPOINT = Endpoint.openrtb2_amp.value();
 
     private final Ortb2RequestFactory ortb2RequestFactory;
     private final StoredRequestProcessor storedRequestProcessor;
+    private final BidRequestOrtbVersionConversionManager ortbVersionConversionManager;
+    private final AmpGppService gppService;
     private final OrtbTypesResolver ortbTypesResolver;
     private final ImplicitParametersExtractor implicitParametersExtractor;
     private final Ortb2ImplicitParametersResolver paramsResolver;
     private final FpdResolver fpdResolver;
-    private final PrivacyEnforcementService privacyEnforcementService;
-    private final TimeoutResolver timeoutResolver;
+    private final AmpPrivacyContextFactory ampPrivacyContextFactory;
     private final DebugResolver debugResolver;
     private final JacksonMapper mapper;
 
-    public AmpRequestFactory(StoredRequestProcessor storedRequestProcessor,
-                             Ortb2RequestFactory ortb2RequestFactory,
+    public AmpRequestFactory(Ortb2RequestFactory ortb2RequestFactory,
+                             StoredRequestProcessor storedRequestProcessor,
+                             BidRequestOrtbVersionConversionManager ortbVersionConversionManager,
+                             AmpGppService gppService,
                              OrtbTypesResolver ortbTypesResolver,
                              ImplicitParametersExtractor implicitParametersExtractor,
                              Ortb2ImplicitParametersResolver paramsResolver,
                              FpdResolver fpdResolver,
-                             PrivacyEnforcementService privacyEnforcementService,
-                             TimeoutResolver timeoutResolver,
+                             AmpPrivacyContextFactory ampPrivacyContextFactory,
                              DebugResolver debugResolver,
                              JacksonMapper mapper) {
 
-        this.storedRequestProcessor = Objects.requireNonNull(storedRequestProcessor);
         this.ortb2RequestFactory = Objects.requireNonNull(ortb2RequestFactory);
+        this.storedRequestProcessor = Objects.requireNonNull(storedRequestProcessor);
+        this.ortbVersionConversionManager = Objects.requireNonNull(ortbVersionConversionManager);
+        this.gppService = Objects.requireNonNull(gppService);
         this.ortbTypesResolver = Objects.requireNonNull(ortbTypesResolver);
         this.implicitParametersExtractor = Objects.requireNonNull(implicitParametersExtractor);
         this.paramsResolver = Objects.requireNonNull(paramsResolver);
         this.fpdResolver = Objects.requireNonNull(fpdResolver);
-        this.timeoutResolver = Objects.requireNonNull(timeoutResolver);
         this.debugResolver = Objects.requireNonNull(debugResolver);
-        this.privacyEnforcementService = Objects.requireNonNull(privacyEnforcementService);
+        this.ampPrivacyContextFactory = Objects.requireNonNull(ampPrivacyContextFactory);
         this.mapper = Objects.requireNonNull(mapper);
     }
 
@@ -131,7 +132,8 @@ public class AmpRequestFactory {
                 Endpoint.openrtb2_amp, MetricName.amp);
 
         return ortb2RequestFactory.executeEntrypointHooks(routingContext, body, initialAuctionContext)
-                .compose(httpRequest -> parseBidRequest(httpRequest, initialAuctionContext)
+                .compose(httpRequest -> parseBidRequest(initialAuctionContext, httpRequest)
+
                         .map(bidRequest -> ortb2RequestFactory.enrichAuctionContext(
                                 initialAuctionContext, httpRequest, bidRequest, startTime)))
 
@@ -140,10 +142,16 @@ public class AmpRequestFactory {
 
                 .map(auctionContext -> auctionContext.with(debugResolver.debugContextFrom(auctionContext)))
 
+                .compose(auctionContext -> gppService.contextFrom(auctionContext)
+                        .map(auctionContext::with))
+
+                .compose(auctionContext -> ortb2RequestFactory.activityInfrastructureFrom(auctionContext)
+                        .map(auctionContext::with))
+
                 .compose(auctionContext -> updateBidRequest(auctionContext)
                         .map(auctionContext::with))
 
-                .compose(auctionContext -> privacyEnforcementService.contextFromBidRequest(auctionContext)
+                .compose(auctionContext -> ampPrivacyContextFactory.contextFrom(auctionContext)
                         .map(auctionContext::with))
 
                 .map(auctionContext -> auctionContext.with(
@@ -152,7 +160,11 @@ public class AmpRequestFactory {
                 .compose(auctionContext -> ortb2RequestFactory.executeProcessedAuctionRequestHooks(auctionContext)
                         .map(auctionContext::with))
 
-                .compose(ortb2RequestFactory::populateDealsInfo)
+                .compose(ortb2RequestFactory::populateUserAdditionalInfo)
+
+                .map(ortb2RequestFactory::enrichWithPriceFloors)
+
+                .map(auctionContext -> ortb2RequestFactory.updateTimeout(auctionContext, startTime))
 
                 .recover(ortb2RequestFactory::restoreResultFromRejection);
     }
@@ -161,31 +173,68 @@ public class AmpRequestFactory {
      * Creates {@link BidRequest} and sets properties which were not set explicitly by the client, but can be
      * updated by values derived from headers and other request attributes.
      */
-    private Future<BidRequest> parseBidRequest(HttpRequestContext httpRequest, AuctionContext auctionContext) {
+    private Future<BidRequest> parseBidRequest(AuctionContext auctionContext, HttpRequestContext httpRequest) {
         final String tagId = httpRequest.getQueryParams().get(TAG_ID_REQUEST_PARAM);
         if (StringUtils.isBlank(tagId)) {
             return Future.failedFuture(new InvalidRequestException("AMP requests require an AMP tag_id"));
         }
 
-        final ConsentType consentType = consentTypeFromQueryStringParams(httpRequest);
-        final String consentString = consentStringFromQueryStringParams(httpRequest);
+        final ConsentParam consentParam = consentParamFromQueryStringParams(httpRequest);
+        final List<String> consentParamValidationErrors = validateConsentParam(consentParam);
+        auctionContext.getPrebidErrors().addAll(consentParamValidationErrors);
+
         final String addtlConsent = addtlConsentFromQueryStringParams(httpRequest);
         final Integer gdpr = gdprFromQueryStringParams(httpRequest);
+        final GppSidExtraction gppSidExtraction = gppSidFromQueryStringParams(httpRequest);
+        final String gpc = implicitParametersExtractor.gpcFrom(httpRequest);
         final Integer debug = debugFromQueryStringParam(httpRequest);
         final Long timeout = timeoutFromQueryString(httpRequest);
 
         final BidRequest bidRequest = BidRequest.builder()
                 .site(createSite(httpRequest))
-                .user(createUser(consentType, consentString, addtlConsent))
-                .regs(createRegs(consentString, consentType, gdpr))
+                .user(createUser(consentParam, addtlConsent))
+                .regs(createRegs(consentParam, gppSidExtraction, gdpr, gpc))
                 .test(debug)
                 .tmax(timeout)
                 .ext(createExt(httpRequest, tagId, debug))
                 .build();
 
-        validateOriginalBidRequest(bidRequest, consentString, auctionContext);
-
         return Future.succeededFuture(bidRequest);
+    }
+
+    private static ConsentParam consentParamFromQueryStringParams(HttpRequestContext httpRequest) {
+        final ConsentType specifiedConsentType = ConsentType.from(httpRequest.getQueryParams().get(CONSENT_TYPE_PARAM));
+        final CaseInsensitiveMultiMap queryParams = httpRequest.getQueryParams();
+
+        final String consentStringParam = queryParams.get(CONSENT_STRING_PARAM);
+        final String gdprConsentParam = queryParams.get(GDPR_CONSENT_PARAM);
+
+        return StringUtils.isNotBlank(consentStringParam)
+                ? toConsentParam(consentStringParam, CONSENT_STRING_PARAM, specifiedConsentType)
+                : toConsentParam(gdprConsentParam, GDPR_CONSENT_PARAM, specifiedConsentType);
+    }
+
+    private static ConsentParam toConsentParam(String consent, String fromParam, ConsentType specifiedConsentType) {
+        return ConsentParam.of(
+                consent,
+                fromParam,
+                specifiedConsentType,
+                TcfDefinerService.isConsentStringValid(consent),
+                Ccpa.isValid(consent));
+    }
+
+    private List<String> validateConsentParam(ConsentParam consentParam) {
+        final List<String> errors = new ArrayList<>();
+
+        if (consentParam.getSpecifiedType() == ConsentType.UNKNOWN) {
+            errors.add("Invalid consent_type param passed");
+        }
+        if (!consentParam.isValid() && consentParam.isConsentStringPresent()) {
+            errors.add("Amp request parameter " + consentParam.getSourceParam()
+                    + " has invalid format: " + consentParam.getConsentString());
+        }
+
+        return errors;
     }
 
     private static Site createSite(HttpRequestContext httpRequest) {
@@ -202,41 +251,56 @@ public class AmpRequestFactory {
                 : null;
     }
 
-    private static User createUser(ConsentType consentType, String consentString, String addtlConsent) {
-        final boolean tcfV2ConsentProvided = (StringUtils.isNotBlank(consentString)
-                && TcfDefinerService.isConsentStringValid(consentString))
-                && (consentType == null || consentType == ConsentType.tcfV2);
-
-        if (StringUtils.isNotBlank(addtlConsent) || tcfV2ConsentProvided) {
-            final ExtUser.ExtUserBuilder userExtBuilder = ExtUser.builder();
-            if (tcfV2ConsentProvided) {
-                userExtBuilder.consent(consentString);
-            }
-            if (StringUtils.isNotBlank(addtlConsent)) {
-                userExtBuilder.consentedProvidersSettings(ConsentedProvidersSettings.of(addtlConsent));
-            }
-            return User.builder().ext(userExtBuilder.build()).build();
+    private static User createUser(ConsentParam consentParam, String addtlConsent) {
+        final String consent = consentParam.isTcfCompatible() ? consentParam.getConsentString() : null;
+        if (StringUtils.isAllBlank(addtlConsent, consent)) {
+            return null;
         }
 
-        return null;
+        final ConsentedProvidersSettings consentedProvidersSettings = StringUtils.isNotBlank(addtlConsent)
+                ? ConsentedProvidersSettings.of(addtlConsent)
+                : null;
+
+        final ExtUser extUser = consentedProvidersSettings != null
+                ? ExtUser.builder()
+                .consentedProvidersSettings(consentedProvidersSettings)
+                .build()
+                : null;
+
+        return User.builder().consent(consent).ext(extUser).build();
     }
 
-    private static Regs createRegs(String consentString, ConsentType consentType, Integer gdpr) {
-        final boolean ccpaProvided = Ccpa.isValid(consentString)
-                && (consentType == null || consentType == ConsentType.usPrivacy);
-        if (ccpaProvided || gdpr != null) {
-            return Regs.of(null, ExtRegs.of(gdpr, ccpaProvided ? consentString : null));
-        }
+    private static Regs createRegs(ConsentParam consentParam,
+                                   GppSidExtraction gppSidExtraction,
+                                   Integer gdpr,
+                                   String gpc) {
 
-        return null;
+        final String usPrivacy = consentParam.isCcpaCompatible() ? consentParam.getConsentString() : null;
+
+        final boolean isSuccessGppSidExtraction = gppSidExtraction.isSuccessExtraction();
+        final List<Integer> gppSid = isSuccessGppSidExtraction ? gppSidExtraction.getGppSid() : null;
+        final String gpp = isSuccessGppSidExtraction && consentParam.isGppCompatible()
+                ? consentParam.getConsentString()
+                : null;
+
+        return gdpr != null || usPrivacy != null || gppSid != null || gpp != null || gpc != null
+                ? Regs.builder()
+                .gdpr(gdpr)
+                .usPrivacy(usPrivacy)
+                .gppSid(gppSid)
+                .gpp(gpp)
+                .ext(gpc != null ? ExtRegs.of(null, null, gpc) : null)
+                .build()
+                : null;
     }
 
     private static ExtRequest createExt(HttpRequestContext httpRequest, String tagId, Integer debug) {
-        return ExtRequest.of(ExtRequestPrebid.builder()
-                .storedrequest(ExtStoredRequest.of(tagId))
-                .amp(ExtRequestPrebidAmp.of(ampDataFromQueryString(httpRequest)))
-                .debug(debug)
-                .build());
+        return ExtRequest.of(
+                ExtRequestPrebid.builder()
+                        .storedrequest(ExtStoredRequest.of(tagId))
+                        .amp(ExtRequestPrebidAmp.of(ampDataFromQueryString(httpRequest)))
+                        .debug(debug)
+                        .build());
     }
 
     /**
@@ -255,30 +319,6 @@ public class AmpRequestFactory {
         }
     }
 
-    private static ConsentType consentTypeFromQueryStringParams(HttpRequestContext httpRequest) {
-        final String consentTypeParam = httpRequest.getQueryParams().get(CONSENT_TYPE_PARAM);
-        if (consentTypeParam == null) {
-            return null;
-        }
-        switch (consentTypeParam) {
-            case "1":
-                return ConsentType.tcfV1;
-            case "2":
-                return ConsentType.tcfV2;
-            case "3":
-                return ConsentType.usPrivacy;
-            default:
-                return ConsentType.unknown;
-        }
-    }
-
-    private static String consentStringFromQueryStringParams(HttpRequestContext httpRequest) {
-        final String requestConsentParam = httpRequest.getQueryParams().get(CONSENT_PARAM);
-        final String requestGdprConsentParam = httpRequest.getQueryParams().get(GDPR_CONSENT_PARAM);
-
-        return ObjectUtils.firstNonNull(requestConsentParam, requestGdprConsentParam);
-    }
-
     private static String addtlConsentFromQueryStringParams(HttpRequestContext httpRequest) {
         return httpRequest.getQueryParams().get(ADDTL_CONSENT_PARAM);
     }
@@ -292,6 +332,22 @@ public class AmpRequestFactory {
         }
 
         return null;
+    }
+
+    private static GppSidExtraction gppSidFromQueryStringParams(HttpRequestContext httpRequest) {
+        final String gppSidParam = httpRequest.getQueryParams().get(GPP_SID_PARAM);
+
+        try {
+            final List<Integer> gppSid = StringUtils.isNotBlank(gppSidParam)
+                    ? Arrays.stream(gppSidParam.split(","))
+                    .map(Integer::valueOf)
+                    .toList()
+                    : null;
+
+            return GppSidExtraction.success(gppSid);
+        } catch (IllegalArgumentException e) {
+            return GppSidExtraction.failed();
+        }
     }
 
     private static Long timeoutFromQueryString(HttpRequestContext httpRequest) {
@@ -315,30 +371,6 @@ public class AmpRequestFactory {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (value1, value2) -> value1));
     }
 
-    private static void validateOriginalBidRequest(
-            BidRequest bidRequest,
-            String requestConsentString,
-            AuctionContext auctionContext) {
-
-        final User user = bidRequest.getUser();
-        final ExtUser extUser = user != null ? user.getExt() : null;
-        final String gdprConsentString = extUser != null ? extUser.getConsent() : null;
-
-        final Regs regs = bidRequest.getRegs();
-        final ExtRegs extRegs = regs != null ? regs.getExt() : null;
-        final String usPrivacy = extRegs != null ? extRegs.getUsPrivacy() : null;
-
-        if (StringUtils.isAllBlank(gdprConsentString, usPrivacy)) {
-            final String message = String.format(
-                    "Amp request parameter %s or %s have invalid format: %s",
-                    CONSENT_PARAM,
-                    GDPR_CONSENT_PARAM,
-                    requestConsentString);
-            logger.debug(message);
-            auctionContext.getPrebidErrors().add(message);
-        }
-    }
-
     /**
      * Creates {@link BidRequest} and sets properties which were not set explicitly by the client, but can be
      * updated by values derived from headers and other request attributes.
@@ -357,11 +389,20 @@ public class AmpRequestFactory {
         final HttpRequestContext httpRequest = auctionContext.getHttpRequest();
 
         return storedRequestProcessor.processAmpRequest(accountId, storedRequestId, receivedBidRequest)
+                .map(ortbVersionConversionManager::convertToAuctionSupportedVersion)
+                .map(bidRequest -> gppService.updateBidRequest(bidRequest, auctionContext))
                 .map(bidRequest -> validateStoredBidRequest(storedRequestId, bidRequest))
                 .map(this::fillExplicitParameters)
                 .map(bidRequest -> overrideParameters(bidRequest, httpRequest, auctionContext.getPrebidErrors()))
-                .map(bidRequest -> paramsResolver.resolve(bidRequest, httpRequest, timeoutResolver, ENDPOINT))
-                .map(ortb2RequestFactory::validateRequest);
+                .map(bidRequest -> paramsResolver.resolve(
+                        bidRequest,
+                        httpRequest,
+                        ENDPOINT,
+                        true))
+                .compose(resolvedBidRequest -> ortb2RequestFactory.validateRequest(
+                        resolvedBidRequest,
+                        auctionContext.getHttpRequest(),
+                        auctionContext.getDebugWarnings()));
     }
 
     private static String storedRequestId(BidRequest receivedBidRequest) {
@@ -378,18 +419,21 @@ public class AmpRequestFactory {
         final List<Imp> imps = bidRequest.getImp();
         if (CollectionUtils.isEmpty(imps)) {
             throw new InvalidRequestException(
-                    String.format("data for tag_id='%s' does not define the required imp array.", tagId));
+                    "data for tag_id='%s' does not define the required imp array.".formatted(tagId));
         }
 
         final int impSize = imps.size();
         if (impSize > 1) {
             throw new InvalidRequestException(
-                    String.format("data for tag_id '%s' includes %d imp elements. Only one is allowed", tagId,
-                            impSize));
+                    "data for tag_id '%s' includes %d imp elements. Only one is allowed".formatted(tagId, impSize));
         }
 
         if (bidRequest.getApp() != null) {
             throw new InvalidRequestException("request.app must not exist in AMP stored requests.");
+        }
+
+        if (bidRequest.getDooh() != null) {
+            throw new InvalidRequestException("request.dooh must not exist in AMP stored requests.");
         }
 
         return bidRequest;
@@ -417,12 +461,9 @@ public class AmpRequestFactory {
         final boolean setDefaultTargeting;
         final boolean setDefaultCache;
 
-        final boolean setChannel;
-
         if (prebid == null) {
             setDefaultTargeting = true;
             setDefaultCache = true;
-            setChannel = true;
         } else {
             final ExtRequestTargeting targeting = prebid.getTargeting();
             setDefaultTargeting = targeting == null
@@ -432,23 +473,19 @@ public class AmpRequestFactory {
 
             final ExtRequestPrebidCache cache = prebid.getCache();
             setDefaultCache = cache == null || cache.equals(ExtRequestPrebidCache.EMPTY);
-
-            setChannel = prebid.getChannel() == null;
         }
 
         final BidRequest result;
         if (setSecure
                 || setDefaultTargeting
-                || setDefaultCache
-                || setChannel) {
+                || setDefaultCache) {
 
             result = bidRequest.toBuilder()
                     .imp(setSecure ? Collections.singletonList(imps.get(0).toBuilder().secure(1).build()) : imps)
                     .ext(extRequest(
                             bidRequest,
                             setDefaultTargeting,
-                            setDefaultCache,
-                            setChannel))
+                            setDefaultCache))
                     .build();
         } else {
             result = bidRequest;
@@ -462,19 +499,16 @@ public class AmpRequestFactory {
     private BidRequest overrideParameters(BidRequest bidRequest, HttpRequestContext httpRequest, List<String> errors) {
         final String requestTargeting = httpRequest.getQueryParams().get(TARGETING_REQUEST_PARAM);
         final ObjectNode targetingNode = readTargeting(requestTargeting);
-        ortbTypesResolver.normalizeTargeting(
-                targetingNode, errors, implicitParametersExtractor.refererFrom(httpRequest));
-        final Targeting targeting = parseTargeting(targetingNode);
+        final String referer = implicitParametersExtractor.refererFrom(httpRequest);
+        ortbTypesResolver.normalizeTargeting(targetingNode, errors, referer);
 
         final Site updatedSite = overrideSite(bidRequest.getSite());
         final Imp updatedImp = overrideImp(bidRequest.getImp().get(0), httpRequest, targetingNode);
-        final ExtRequest updatedExtBidRequest = overrideExtBidRequest(bidRequest.getExt(), targeting);
 
-        if (ObjectUtils.anyNotNull(updatedSite, updatedImp, updatedExtBidRequest)) {
+        if (ObjectUtils.anyNotNull(updatedSite, updatedImp)) {
             return bidRequest.toBuilder()
                     .site(updatedSite != null ? updatedSite : bidRequest.getSite())
                     .imp(updatedImp != null ? Collections.singletonList(updatedImp) : bidRequest.getImp())
-                    .ext(updatedExtBidRequest != null ? updatedExtBidRequest : bidRequest.getExt())
                     .build();
         }
 
@@ -489,7 +523,7 @@ public class AmpRequestFactory {
                     : null;
             return jsonNodeTargeting != null ? validateAndGetTargeting(jsonNodeTargeting) : null;
         } catch (JsonProcessingException | IllegalArgumentException e) {
-            throw new InvalidRequestException(String.format("Error reading targeting json %s", e.getMessage()));
+            throw new InvalidRequestException("Error reading targeting json " + e.getMessage());
         }
     }
 
@@ -497,18 +531,8 @@ public class AmpRequestFactory {
         if (jsonNodeTargeting.isObject()) {
             return (ObjectNode) jsonNodeTargeting;
         } else {
-            throw new InvalidRequestException(String.format("Error decoding targeting, expected type is `object` "
-                    + "but was %s", jsonNodeTargeting.getNodeType().name()));
-        }
-    }
-
-    private Targeting parseTargeting(ObjectNode targetingNode) {
-        try {
-            return targetingNode == null
-                    ? Targeting.empty()
-                    : mapper.mapper().treeToValue(targetingNode, Targeting.class);
-        } catch (JsonProcessingException e) {
-            throw new InvalidRequestException(String.format("Error decoding targeting from url: %s", e.getMessage()));
+            throw new InvalidRequestException("Error decoding targeting, expected type is `object` but was "
+                    + jsonNodeTargeting.getNodeType().name());
         }
     }
 
@@ -611,11 +635,11 @@ public class AmpRequestFactory {
         if (width != 0) {
             updatedFormats = formats.stream()
                     .map(format -> Format.builder().w(width).h(format.getH()).build())
-                    .collect(Collectors.toList());
+                    .toList();
         } else if (height != 0) {
             updatedFormats = formats.stream()
                     .map(format -> Format.builder().w(format.getW()).h(height).build())
-                    .collect(Collectors.toList());
+                    .toList();
         } else {
             updatedFormats = Collections.emptyList();
         }
@@ -626,13 +650,6 @@ public class AmpRequestFactory {
         return banner != null && CollectionUtils.isNotEmpty(formats)
                 ? banner.toBuilder().format(formats).build()
                 : banner;
-    }
-
-    /**
-     * Overrides {@link ExtRequest} with first party data.
-     */
-    private ExtRequest overrideExtBidRequest(ExtRequest extRequest, Targeting targeting) {
-        return fpdResolver.resolveBidRequestExt(extRequest, targeting);
     }
 
     private static List<Format> parseMultiSizeParam(String ms) {
@@ -664,11 +681,10 @@ public class AmpRequestFactory {
      */
     private ExtRequest extRequest(BidRequest bidRequest,
                                   boolean setDefaultTargeting,
-                                  boolean setDefaultCache,
-                                  boolean setChannel) {
+                                  boolean setDefaultCache) {
 
         final ExtRequest result;
-        if (setDefaultTargeting || setDefaultCache || setChannel) {
+        if (setDefaultTargeting || setDefaultCache) {
             final ExtRequest requestExt = bidRequest.getExt();
             final ExtRequestPrebid prebid = requestExt != null ? requestExt.getPrebid() : null;
             final ExtRequestPrebid.ExtRequestPrebidBuilder prebidBuilder = prebid != null
@@ -681,9 +697,6 @@ public class AmpRequestFactory {
             if (setDefaultCache) {
                 prebidBuilder.cache(ExtRequestPrebidCache.of(ExtRequestPrebidCacheBids.of(null, null),
                         ExtRequestPrebidCacheVastxml.of(null, null), null));
-            }
-            if (setChannel) {
-                prebidBuilder.channel(ExtRequestPrebidChannel.of(AMP_CHANNEL));
             }
 
             final ExtRequest updatedExt = ExtRequest.of(prebidBuilder.build());
@@ -732,5 +745,58 @@ public class AmpRequestFactory {
                 .includebidderkeys(includeBidderKeys)
                 .includeformat(includeFormat)
                 .build();
+    }
+
+    @Value(staticConstructor = "of")
+    private static class GppSidExtraction {
+
+        List<Integer> gppSid;
+
+        boolean successExtraction;
+
+        static GppSidExtraction success(List<Integer> gppSid) {
+            return GppSidExtraction.of(gppSid, true);
+        }
+
+        static GppSidExtraction failed() {
+            return GppSidExtraction.of(null, false);
+        }
+    }
+
+    @Value(staticConstructor = "of")
+    private static class ConsentParam {
+
+        String consentString;
+
+        String sourceParam;
+
+        ConsentType specifiedType;
+
+        boolean isTcf;
+
+        boolean isCcpa;
+
+        public boolean isTcfCompatible() {
+            final boolean typeSpecifiedAsTcf =
+                    specifiedType == ConsentType.TCF_V1 || specifiedType == ConsentType.TCF_V2;
+
+            return (isConsentStringPresent() && typeSpecifiedAsTcf) || isTcf;
+        }
+
+        public boolean isCcpaCompatible() {
+            return (isConsentStringPresent() && specifiedType == ConsentType.CCPA) || isCcpa;
+        }
+
+        public boolean isGppCompatible() {
+            return isConsentStringPresent() && specifiedType == ConsentType.GPP;
+        }
+
+        public boolean isValid() {
+            return isTcfCompatible() || isCcpaCompatible();
+        }
+
+        public boolean isConsentStringPresent() {
+            return StringUtils.isNotBlank(consentString);
+        }
     }
 }

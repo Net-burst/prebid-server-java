@@ -14,7 +14,7 @@ import org.prebid.server.privacy.gdpr.tcfstrategies.purpose.typestrategies.Basic
 import org.prebid.server.privacy.gdpr.tcfstrategies.purpose.typestrategies.FullEnforcePurposeStrategy;
 import org.prebid.server.privacy.gdpr.tcfstrategies.purpose.typestrategies.NoEnforcePurposeStrategy;
 import org.prebid.server.privacy.gdpr.vendorlist.proto.PurposeCode;
-import org.prebid.server.privacy.gdpr.vendorlist.proto.VendorV2;
+import org.prebid.server.privacy.gdpr.vendorlist.proto.Vendor;
 import org.prebid.server.settings.model.EnforcePurpose;
 import org.prebid.server.settings.model.Purpose;
 
@@ -68,7 +68,7 @@ public class PurposeEightStrategyTest {
         target.allow(privacyEnforcementAction);
 
         // then
-        assertThat(privacyEnforcementAction).isEqualToComparingFieldByField(allowPurpose());
+        assertThat(privacyEnforcementAction).usingRecursiveComparison().isEqualTo(allowPurpose());
     }
 
     @Test
@@ -80,7 +80,7 @@ public class PurposeEightStrategyTest {
         target.allowNaturally(privacyEnforcementAction);
 
         // then
-        assertThat(privacyEnforcementAction).isEqualToComparingFieldByField(allowNatural());
+        assertThat(privacyEnforcementAction).usingRecursiveComparison().isEqualTo(allowNatural());
     }
 
     @Test
@@ -98,11 +98,11 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2 = VendorPermission.of(2, "b1", PrivacyEnforcementAction.restrictAll());
         final VendorPermission vendorPermission3 = VendorPermission.of(3, null, PrivacyEnforcementAction.restrictAll());
         final VendorPermissionWithGvl vendorPermissionWitGvl1 = VendorPermissionWithGvl.of(vendorPermission1,
-                VendorV2.empty(1));
+                Vendor.empty(1));
         final VendorPermissionWithGvl vendorPermissionWitGvl2 = VendorPermissionWithGvl.of(vendorPermission2,
-                VendorV2.empty(2));
+                Vendor.empty(2));
         final VendorPermissionWithGvl vendorPermissionWitGvl3 = VendorPermissionWithGvl.of(vendorPermission3,
-                VendorV2.empty(3));
+                Vendor.empty(3));
         final List<VendorPermissionWithGvl> vendorPermissionsWithGvl = Arrays.asList(vendorPermissionWitGvl1,
                 vendorPermissionWitGvl2, vendorPermissionWitGvl3);
 
@@ -118,7 +118,7 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2Changed = VendorPermission.of(2, "b1", allowPurpose());
         final VendorPermission vendorPermission3Changed = VendorPermission.of(3, null,
                 PrivacyEnforcementAction.restrictAll());
-        assertThat(result).usingFieldByFieldElementComparator().isEqualTo(
+        assertThat(result).usingRecursiveFieldByFieldElementComparator().isEqualTo(
                 Arrays.asList(vendorPermission1Changed, vendorPermission2Changed, vendorPermission3Changed));
 
         verify(noEnforcePurposeStrategy).allowedByTypeStrategy(PURPOSE_CODE, tcString,
@@ -135,11 +135,11 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2 = VendorPermission.of(2, "b1", PrivacyEnforcementAction.restrictAll());
         final VendorPermission vendorPermission3 = VendorPermission.of(3, null, PrivacyEnforcementAction.restrictAll());
         final VendorPermissionWithGvl vendorPermissionWitGvl1 = VendorPermissionWithGvl.of(vendorPermission1,
-                VendorV2.empty(1));
+                Vendor.empty(1));
         final VendorPermissionWithGvl vendorPermissionWitGvl2 = VendorPermissionWithGvl.of(vendorPermission2,
-                VendorV2.empty(2));
+                Vendor.empty(2));
         final VendorPermissionWithGvl vendorPermissionWitGvl3 = VendorPermissionWithGvl.of(vendorPermission3,
-                VendorV2.empty(3));
+                Vendor.empty(3));
         final List<VendorPermissionWithGvl> vendorPermissionsWithGvl = Arrays.asList(vendorPermissionWitGvl1,
                 vendorPermissionWitGvl2, vendorPermissionWitGvl3);
         given(basicEnforcePurposeStrategy.allowedByTypeStrategy(any(), any(), any(), any(), anyBoolean()))
@@ -154,7 +154,7 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2Changed = VendorPermission.of(2, "b1", allowPurpose());
         final VendorPermission vendorPermission3Changed = VendorPermission.of(3, null,
                 PrivacyEnforcementAction.restrictAll());
-        assertThat(result).usingFieldByFieldElementComparator().isEqualTo(
+        assertThat(result).usingRecursiveFieldByFieldElementComparator().isEqualTo(
                 Arrays.asList(vendorPermission1Changed, vendorPermission2Changed, vendorPermission3Changed));
 
         verify(basicEnforcePurposeStrategy).allowedByTypeStrategy(PURPOSE_CODE, tcString,
@@ -170,11 +170,11 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2 = VendorPermission.of(2, "b2", PrivacyEnforcementAction.restrictAll());
         final VendorPermission vendorPermission3 = VendorPermission.of(3, "b3", PrivacyEnforcementAction.restrictAll());
         final VendorPermissionWithGvl vendorPermissionWitGvl1 = VendorPermissionWithGvl.of(vendorPermission1,
-                VendorV2.empty(1));
+                Vendor.empty(1));
         final VendorPermissionWithGvl vendorPermissionWitGvl2 = VendorPermissionWithGvl.of(vendorPermission2,
-                VendorV2.empty(2));
+                Vendor.empty(2));
         final VendorPermissionWithGvl vendorPermissionWitGvl3 = VendorPermissionWithGvl.of(vendorPermission3,
-                VendorV2.empty(3));
+                Vendor.empty(3));
         final List<VendorPermission> vendorPermissions = Arrays.asList(vendorPermission1, vendorPermission2,
                 vendorPermission3);
         final List<VendorPermissionWithGvl> vendorPermissionsWithGvl = Arrays.asList(vendorPermissionWitGvl1,
@@ -191,7 +191,7 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission1Changed = VendorPermission.of(1, "b1", allowPurpose());
         final VendorPermission vendorPermission2Changed = VendorPermission.of(2, "b2", allowPurpose());
         final VendorPermission vendorPermission3Changed = VendorPermission.of(3, "b3", allowPurpose());
-        assertThat(result).usingFieldByFieldElementComparator().isEqualTo(
+        assertThat(result).usingRecursiveFieldByFieldElementComparator().isEqualTo(
                 Arrays.asList(vendorPermission1Changed, vendorPermission2Changed, vendorPermission3Changed));
 
         verify(basicEnforcePurposeStrategy).allowedByTypeStrategy(PURPOSE_CODE, tcString, emptyList(),
@@ -206,11 +206,11 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2 = VendorPermission.of(2, "b2", PrivacyEnforcementAction.restrictAll());
         final VendorPermission vendorPermission3 = VendorPermission.of(3, "b3", PrivacyEnforcementAction.restrictAll());
         final VendorPermissionWithGvl vendorPermissionWitGvl1 = VendorPermissionWithGvl.of(vendorPermission1,
-                VendorV2.empty(1));
+                Vendor.empty(1));
         final VendorPermissionWithGvl vendorPermissionWitGvl2 = VendorPermissionWithGvl.of(vendorPermission2,
-                VendorV2.empty(2));
+                Vendor.empty(2));
         final VendorPermissionWithGvl vendorPermissionWitGvl3 = VendorPermissionWithGvl.of(vendorPermission3,
-                VendorV2.empty(3));
+                Vendor.empty(3));
         final List<VendorPermission> vendorPermissions = Arrays.asList(vendorPermission1, vendorPermission2,
                 vendorPermission3);
         final List<VendorPermissionWithGvl> vendorPermissionsWithGvl = Arrays.asList(vendorPermissionWitGvl1,
@@ -227,7 +227,7 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission1Changed = VendorPermission.of(1, "b1", allowPurposeAndNaturally());
         final VendorPermission vendorPermission2Changed = VendorPermission.of(2, "b2", allowPurposeAndNaturally());
         final VendorPermission vendorPermission3Changed = VendorPermission.of(3, "b3", allowPurposeAndNaturally());
-        assertThat(result).usingFieldByFieldElementComparator().isEqualTo(
+        assertThat(result).usingRecursiveFieldByFieldElementComparator().isEqualTo(
                 Arrays.asList(vendorPermission1Changed, vendorPermission2Changed, vendorPermission3Changed));
 
         verify(fullEnforcePurposeStrategy, times(2)).allowedByTypeStrategy(PURPOSE_CODE, tcString, emptyList(),
@@ -242,11 +242,11 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2 = VendorPermission.of(2, "b2", PrivacyEnforcementAction.restrictAll());
         final VendorPermission vendorPermission3 = VendorPermission.of(3, "b3", PrivacyEnforcementAction.restrictAll());
         final VendorPermissionWithGvl vendorPermissionWitGvl1 = VendorPermissionWithGvl.of(vendorPermission1,
-                VendorV2.empty(1));
+                Vendor.empty(1));
         final VendorPermissionWithGvl vendorPermissionWitGvl2 = VendorPermissionWithGvl.of(vendorPermission2,
-                VendorV2.empty(2));
+                Vendor.empty(2));
         final VendorPermissionWithGvl vendorPermissionWitGvl3 = VendorPermissionWithGvl.of(vendorPermission3,
-                VendorV2.empty(3));
+                Vendor.empty(3));
         final List<VendorPermission> vendorPermissions = Arrays.asList(vendorPermission1, vendorPermission2,
                 vendorPermission3);
         final List<VendorPermission> excludedVendorPermissions = Arrays.asList(vendorPermission1, vendorPermission2);
@@ -269,7 +269,7 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission1Changed = VendorPermission.of(1, "b1", allowPurposeAndNaturally());
         final VendorPermission vendorPermission2Changed = VendorPermission.of(2, "b2", allowPurposeAndNaturally());
         final VendorPermission vendorPermission3Changed = VendorPermission.of(3, "b3", allowPurpose());
-        assertThat(result).usingFieldByFieldElementComparator().isEqualTo(
+        assertThat(result).usingRecursiveFieldByFieldElementComparator().isEqualTo(
                 Arrays.asList(vendorPermission1Changed, vendorPermission2Changed, vendorPermission3Changed));
 
         verify(fullEnforcePurposeStrategy, times(2)).allowedByTypeStrategy(PURPOSE_CODE, tcString,
@@ -284,11 +284,11 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission2 = VendorPermission.of(2, "b2", PrivacyEnforcementAction.restrictAll());
         final VendorPermission vendorPermission3 = VendorPermission.of(3, "b3", PrivacyEnforcementAction.restrictAll());
         final VendorPermissionWithGvl vendorPermissionWitGvl1 = VendorPermissionWithGvl.of(vendorPermission1,
-                VendorV2.empty(1));
+                Vendor.empty(1));
         final VendorPermissionWithGvl vendorPermissionWitGvl2 = VendorPermissionWithGvl.of(vendorPermission2,
-                VendorV2.empty(2));
+                Vendor.empty(2));
         final VendorPermissionWithGvl vendorPermissionWitGvl3 = VendorPermissionWithGvl.of(vendorPermission3,
-                VendorV2.empty(3));
+                Vendor.empty(3));
         final List<VendorPermission> vendorPermissions = Arrays.asList(vendorPermission1, vendorPermission2,
                 vendorPermission3);
 
@@ -313,7 +313,7 @@ public class PurposeEightStrategyTest {
         final VendorPermission vendorPermission1Changed = VendorPermission.of(1, "b1", allowPurposeAndNaturally());
         final VendorPermission vendorPermission2Changed = VendorPermission.of(2, "b2", allowPurposeAndNaturally());
         final VendorPermission vendorPermission3Changed = VendorPermission.of(3, "b3", allowPurpose());
-        assertThat(result).usingFieldByFieldElementComparator().isEqualTo(
+        assertThat(result).usingRecursiveFieldByFieldElementComparator().isEqualTo(
                 Arrays.asList(vendorPermission1Changed, vendorPermission2Changed, vendorPermission3Changed));
 
         verify(noEnforcePurposeStrategy).allowedByTypeStrategy(PURPOSE_CODE, tcString,

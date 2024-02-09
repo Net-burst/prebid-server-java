@@ -13,8 +13,10 @@ import org.prebid.server.exception.PreBidException;
 import org.prebid.server.settings.model.Account;
 import org.prebid.server.settings.model.AccountAnalyticsConfig;
 import org.prebid.server.settings.model.AccountAuctionConfig;
+import org.prebid.server.settings.model.AccountAuctionEventConfig;
 import org.prebid.server.settings.model.AccountBidValidationConfig;
 import org.prebid.server.settings.model.AccountCookieSyncConfig;
+import org.prebid.server.settings.model.AccountCoopSyncConfig;
 import org.prebid.server.settings.model.AccountEventsConfig;
 import org.prebid.server.settings.model.AccountGdprConfig;
 import org.prebid.server.settings.model.AccountPrivacyConfig;
@@ -106,11 +108,12 @@ public class FileApplicationSettingsTest extends VertxTest {
                         + "privacy: {"
                         + "gdpr: {"
                         + "enabled: true,"
-                        + "integration-enabled: {"
+                        + "channel-enabled: {"
                         + "amp: true,"
                         + "web: true,"
                         + "video: true,"
-                        + "app: true"
+                        + "app: true,"
+                        + "dooh: true"
                         + "},"
                         + "purposes: {"
                         + "p1: {enforce-purpose: basic,enforce-vendors: false,vendor-exceptions: [rubicon, appnexus]},"
@@ -127,7 +130,7 @@ public class FileApplicationSettingsTest extends VertxTest {
                         + "auction-events: {amp: true},"
                         + "modules: {some-analytics: {supported-endpoints: [auction]}}"
                         + "},"
-                        + "cookie-sync: {default-limit: 5,max-limit: 8,default-coop-sync: true}"
+                        + "cookie-sync: {default-limit: 5,max-limit: 8, coop-sync: {default: true}}"
                         + "}"
                         + "]"));
 
@@ -140,6 +143,8 @@ public class FileApplicationSettingsTest extends VertxTest {
 
         // then
         assertThat(account.succeeded()).isTrue();
+        final AccountAuctionEventConfig expectedEventsConfig = AccountAuctionEventConfig.builder().build();
+        expectedEventsConfig.addEvent("amp", true);
         assertThat(account.result()).isEqualTo(Account.builder()
                 .id("123")
                 .status(AccountStatus.active)
@@ -155,7 +160,7 @@ public class FileApplicationSettingsTest extends VertxTest {
                 .privacy(AccountPrivacyConfig.of(
                         AccountGdprConfig.builder()
                                 .enabled(true)
-                                .enabledForRequestType(EnabledForRequestType.of(true, true, true, true))
+                                .enabledForRequestType(EnabledForRequestType.of(true, true, true, true, true))
                                 .purposes(Purposes.builder()
                                         .p1(Purpose.of(EnforcePurpose.basic, false, asList("rubicon", "appnexus")))
                                         .p2(Purpose.of(EnforcePurpose.full, true, singletonList("openx")))
@@ -166,14 +171,16 @@ public class FileApplicationSettingsTest extends VertxTest {
                                         .build())
                                 .purposeOneTreatmentInterpretation(PurposeOneTreatmentInterpretation.accessAllowed)
                                 .build(),
+                        null,
+                        null,
                         null))
                 .analytics(AccountAnalyticsConfig.of(
-                        singletonMap("amp", true),
+                        expectedEventsConfig,
                         singletonMap(
                                 "some-analytics",
                                 mapper.createObjectNode()
                                         .set("supported-endpoints", mapper.createArrayNode().add("auction")))))
-                .cookieSync(AccountCookieSyncConfig.of(5, 8, true))
+                .cookieSync(AccountCookieSyncConfig.of(5, 8, null, AccountCoopSyncConfig.of(true)))
                 .build());
     }
 

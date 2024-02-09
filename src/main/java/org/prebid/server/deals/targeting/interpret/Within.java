@@ -15,7 +15,7 @@ public class Within implements TerminalExpression {
 
     private final TargetingCategory category;
 
-    private GeoRegion value;
+    private final GeoRegion value;
 
     public Within(TargetingCategory category, GeoRegion value) {
         this.category = Objects.requireNonNull(category);
@@ -39,10 +39,10 @@ public class Within implements TerminalExpression {
         final double dLat = Math.toRadians(endLat - startLat);
         final double dLong = Math.toRadians(endLong - startLong);
 
-        double a = Math.pow(Math.sin(dLat / 2), 2)
+        final double a = Math.pow(Math.sin(dLat / 2), 2)
                 + Math.cos(Math.toRadians(startLat)) * Math.cos(Math.toRadians(endLat))
                 * Math.pow(Math.sin(dLong / 2), 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        final double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
         return EARTH_RADIUS_MI * c;
     }

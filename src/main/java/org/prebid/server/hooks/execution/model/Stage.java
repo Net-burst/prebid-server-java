@@ -13,6 +13,7 @@ public enum Stage {
     bidder_request("bidder-request"),
     raw_bidder_response("raw-bidder-response"),
     processed_bidder_response("processed-bidder-response"),
+    all_processed_bid_responses("all-processed-bid-responses"),
     auction_response("auction-response");
 
     @JsonValue
@@ -26,6 +27,7 @@ public enum Stage {
         this.value = value;
     }
 
+    @SuppressWarnings("unused")
     @JsonCreator
     public static Stage fromString(String value) {
         return Arrays.stream(values())

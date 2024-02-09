@@ -16,7 +16,6 @@ import org.prebid.server.model.CaseInsensitiveMultiMap;
 import org.prebid.server.model.Endpoint;
 import org.prebid.server.model.HttpRequestContext;
 
-import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
@@ -26,7 +25,6 @@ import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +45,7 @@ public final class HttpUtil {
                     + StandardCharsets.UTF_8.toString().toLowerCase();
 
     public static final CharSequence X_FORWARDED_FOR_HEADER = HttpHeaders.createOptimized("X-Forwarded-For");
+    public static final CharSequence X_REAL_IP_HEADER = HttpHeaders.createOptimized("X-Real-Ip");
     public static final CharSequence DNT_HEADER = HttpHeaders.createOptimized("DNT");
     public static final CharSequence X_REQUEST_AGENT_HEADER = HttpHeaders.createOptimized("X-Request-Agent");
     public static final CharSequence ORIGIN_HEADER = HttpHeaders.createOptimized("Origin");
@@ -70,8 +69,15 @@ public final class HttpUtil {
     public static final CharSequence CONTENT_ENCODING_HEADER = HttpHeaders.createOptimized("Content-Encoding");
     public static final CharSequence X_OPENRTB_VERSION_HEADER = HttpHeaders.createOptimized("x-openrtb-version");
     public static final CharSequence X_PREBID_HEADER = HttpHeaders.createOptimized("x-prebid");
-    private static final Set<String> SENSITIVE_HEADERS = new HashSet<>(Arrays.asList(AUTHORIZATION_HEADER.toString()));
+    private static final Set<String> SENSITIVE_HEADERS = Set.of(AUTHORIZATION_HEADER.toString());
     public static final CharSequence PG_TRX_ID = HttpHeaders.createOptimized("pg-trx-id");
+    public static final CharSequence PG_IGNORE_PACING = HttpHeaders.createOptimized("X-Prebid-PG-ignore-pacing");
+
+    //the low-entropy client hints
+    public static final CharSequence SAVE_DATA = HttpHeaders.createOptimized("Save-Data");
+    public static final CharSequence SEC_CH_UA = HttpHeaders.createOptimized("Sec-CH-UA");
+    public static final CharSequence SEC_CH_UA_MOBILE = HttpHeaders.createOptimized("Sec-CH-UA-Mobile");
+    public static final CharSequence SEC_CH_UA_PLATFORM = HttpHeaders.createOptimized("Sec-CH-UA-Platform");
 
     private static final String BASIC_AUTH_PATTERN = "Basic %s";
 
@@ -85,7 +91,7 @@ public final class HttpUtil {
         try {
             return new URL(url).toString();
         } catch (MalformedURLException e) {
-            throw new IllegalArgumentException(String.format("URL supplied is not valid: %s", url), e);
+            throw new IllegalArgumentException("URL supplied is not valid: " + url, e);
         }
     }
 
@@ -95,11 +101,7 @@ public final class HttpUtil {
      * The result can be safety used as the query string.
      */
     public static String encodeUrl(String value) {
-        try {
-            return URLEncoder.encode(value, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            throw new IllegalArgumentException(String.format("Cannot encode url: %s", value));
-        }
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     /**
@@ -109,11 +111,7 @@ public final class HttpUtil {
         if (StringUtils.isBlank(value)) {
             return null;
         }
-        try {
-            return URLDecoder.decode(value, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            throw new IllegalArgumentException(String.format("Cannot decode url: %s", value));
-        }
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 
     /**
@@ -151,8 +149,8 @@ public final class HttpUtil {
         try {
             return ZonedDateTime.parse(isoTimeStamp);
         } catch (Exception e) {
-            throw new PreBidException(String.format("%s header is not compatible to ISO-8601 format: %s",
-                    header, isoTimeStamp));
+            throw new PreBidException(
+                    "%s header is not compatible to ISO-8601 format: %s".formatted(header, isoTimeStamp));
         }
     }
 
@@ -192,10 +190,6 @@ public final class HttpUtil {
                 .collect(Collectors.joining("; "));
     }
 
-    public static String toSetCookieHeaderValue(Cookie cookie) {
-        return String.join("; ", cookie.encode(), "SameSite=None; Secure");
-    }
-
     public static boolean executeSafely(RoutingContext routingContext, Endpoint endpoint,
                                         Consumer<HttpServerResponse> responseConsumer) {
         return executeSafely(routingContext, endpoint.value(), responseConsumer);
@@ -208,7 +202,7 @@ public final class HttpUtil {
 
         if (response.closed()) {
             conditionalLogger.warn(
-                    String.format("Client already closed connection, response to %s will be skipped", endpoint),
+                    "Client already closed connection, response to %s will be skipped".formatted(endpoint),
                     0.01);
             return false;
         }
@@ -226,8 +220,8 @@ public final class HttpUtil {
      * Creates standart basic auth header value
      */
     public static String makeBasicAuthHeaderValue(String username, String password) {
-        return String.format(BASIC_AUTH_PATTERN, Base64.getEncoder().encodeToString((username + ':' + password)
-                .getBytes()));
+        return BASIC_AUTH_PATTERN
+                .formatted(Base64.getEncoder().encodeToString((username + ':' + password).getBytes()));
     }
 
     /**
@@ -242,7 +236,7 @@ public final class HttpUtil {
                         entry -> StringUtils.isNotBlank(entry.getValue())
                                 ? Arrays.stream(entry.getValue().split(","))
                                 .map(String::trim)
-                                .collect(Collectors.toList())
+                                .toList()
                                 : Collections.singletonList(entry.getValue())))
                 : null;
     }

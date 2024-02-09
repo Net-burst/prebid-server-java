@@ -5,17 +5,29 @@
   "type": "object",
   "properties": {
     "accountId": {
-      "type": "integer",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^\\d+$",
       "minimum": 1,
       "description": "An ID which identifies the publisher's account"
     },
     "siteId": {
-      "type": "integer",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^\\d+$",
       "minimum": 1,
       "description": "An ID which identifies the site selling the impression"
     },
     "zoneId": {
-      "type": "integer",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^\\d+$",
       "minimum": 1,
       "description": "An ID which identifies the sub-section of the site where the impression is located"
     },
@@ -25,6 +37,10 @@
       "additionalProperties": {
         "type": "array"
       }
+    },
+    "bidonmultiformat": {
+      "type": "boolean",
+      "description": "It determines if the request should be processed in multi format way."
     },
     "visitor": {
       "type": "object",
@@ -61,7 +77,7 @@
           "type": "integer",
           "description": "Can this ad be skipped ( 0 = no, 1 = yes)"
         },
-        "skipDelay": {
+        "skipdelay": {
           "type": "integer",
           "description": "number of seconds until the ad can be skipped"
         }

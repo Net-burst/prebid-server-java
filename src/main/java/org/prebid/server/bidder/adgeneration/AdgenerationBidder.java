@@ -1,6 +1,7 @@
 package org.prebid.server.bidder.adgeneration;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.iab.openrtb.request.App;
 import com.iab.openrtb.request.Banner;
 import com.iab.openrtb.request.BidRequest;
 import com.iab.openrtb.request.Device;
@@ -17,8 +18,8 @@ import org.apache.http.client.utils.URIBuilder;
 import org.prebid.server.bidder.Bidder;
 import org.prebid.server.bidder.adgeneration.model.AdgenerationResponse;
 import org.prebid.server.bidder.model.BidderBid;
+import org.prebid.server.bidder.model.BidderCall;
 import org.prebid.server.bidder.model.BidderError;
-import org.prebid.server.bidder.model.HttpCall;
 import org.prebid.server.bidder.model.HttpRequest;
 import org.prebid.server.bidder.model.HttpResponse;
 import org.prebid.server.bidder.model.Result;
@@ -29,6 +30,7 @@ import org.prebid.server.proto.openrtb.ext.ExtPrebid;
 import org.prebid.server.proto.openrtb.ext.request.adgeneration.ExtImpAdgeneration;
 import org.prebid.server.proto.openrtb.ext.response.BidType;
 import org.prebid.server.util.HttpUtil;
+import org.prebid.server.util.ObjectUtil;
 
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -39,14 +41,14 @@ import java.util.stream.Collectors;
 
 public class AdgenerationBidder implements Bidder<Void> {
 
-    private static final String VERSION = "1.0.2";
+    private static final String VERSION = "1.0.3";
     private static final String DEFAULT_REQUEST_CURRENCY = "JPY";
     private static final Pattern REPLACE_VAST_XML_PATTERN = Pattern.compile("/\\r?\\n/g", Pattern.CASE_INSENSITIVE);
     private static final Pattern APPEND_CHILD_TO_BODY_PATTERN = Pattern.compile("</\\s?body>",
             Pattern.CASE_INSENSITIVE);
 
     private static final TypeReference<ExtPrebid<?, ExtImpAdgeneration>> ADGENERATION_EXT_TYPE_REFERENCE =
-            new TypeReference<ExtPrebid<?, ExtImpAdgeneration>>() {
+            new TypeReference<>() {
             };
 
     private final String endpointUrl;
@@ -67,8 +69,7 @@ public class AdgenerationBidder implements Bidder<Void> {
                 final String adgenerationId = extImpAdgeneration.getId();
                 final String adSizes = getAdSize(imp);
                 final String currency = getCurrency(request);
-                final String uri = getUri(adSizes, adgenerationId, currency,
-                        request.getSite(), request.getSource());
+                final String uri = getUri(adSizes, adgenerationId, currency, request);
 
                 requests.add(createSingleRequest(uri, request.getDevice()));
             } catch (PreBidException e) {
@@ -94,46 +95,56 @@ public class AdgenerationBidder implements Bidder<Void> {
         return extImpAdgeneration;
     }
 
-    private String getUri(String adSize, String id, String currency, Site site, Source source) {
+    private String getUri(String adSize, String id, String currency, BidRequest bidRequest) {
         final URIBuilder uriBuilder;
         try {
             uriBuilder = new URIBuilder(endpointUrl);
         } catch (URISyntaxException e) {
-            throw new PreBidException(String.format("Invalid url: %s, error: %s", endpointUrl, e.getMessage()));
+            throw new PreBidException("Invalid url: %s, error: %s".formatted(endpointUrl, e.getMessage()));
         }
 
         uriBuilder
                 .addParameter("posall", "SSPLOC")
                 .addParameter("id", id)
-                .addParameter("sdktype", "0")
                 .addParameter("hb", "true")
                 .addParameter("t", "json3")
                 .addParameter("currency", currency)
                 .addParameter("sdkname", "prebidserver")
                 .addParameter("adapterver", VERSION);
 
-        if (StringUtils.isNotBlank(adSize)) {
-            uriBuilder.addParameter("sizes", adSize);
-        }
+        addParameterIfNotEmpty(uriBuilder, "sizes", adSize);
+        addParameterIfNotEmpty(uriBuilder, "tp", ObjectUtil.getIfNotNull(bidRequest.getSite(), Site::getPage));
+        addParameterIfNotEmpty(uriBuilder, "appbundle", ObjectUtil.getIfNotNull(bidRequest.getApp(), App::getBundle));
+        addParameterIfNotEmpty(uriBuilder, "appname", ObjectUtil.getIfNotNull(bidRequest.getApp(), App::getName));
+        addParameterIfNotEmpty(
+                uriBuilder, "transactionid", ObjectUtil.getIfNotNull(bidRequest.getSource(), Source::getTid));
 
-        final String page = site != null ? site.getPage() : null;
-        if (StringUtils.isNotBlank(page)) {
-            uriBuilder.addParameter("tp", page);
-        }
-
-        final String transactionId = source != null ? source.getTid() : null;
-        if (StringUtils.isNotBlank(transactionId)) {
-            uriBuilder.addParameter("transactionid", transactionId);
+        final Device device = bidRequest.getDevice();
+        final String deviceOs = device != null ? device.getOs() : null;
+        if ("android".equals(deviceOs)) {
+            uriBuilder.addParameter("sdktype", "1");
+            addParameterIfNotEmpty(uriBuilder, "advertising_id", device.getIfa());
+        } else if ("ios".equals(deviceOs)) {
+            uriBuilder.addParameter("sdktype", "2");
+            addParameterIfNotEmpty(uriBuilder, "idfa", device.getIfa());
+        } else {
+            uriBuilder.addParameter("sdktype", "0");
         }
 
         return uriBuilder.toString();
+    }
+
+    private static void addParameterIfNotEmpty(URIBuilder uriBuilder, String parameter, String value) {
+        if (StringUtils.isNotEmpty(value)) {
+            uriBuilder.addParameter(parameter, value);
+        }
     }
 
     private static String getAdSize(Imp imp) {
         final Banner banner = imp.getBanner();
         final List<Format> formats = banner != null ? banner.getFormat() : null;
         return CollectionUtils.emptyIfNull(formats).stream()
-                .map(format -> String.format("%sx%s", format.getW(), format.getH()))
+                .map(format -> "%sx%s".formatted(format.getW(), format.getH()))
                 .collect(Collectors.joining(","));
     }
 
@@ -155,15 +166,16 @@ public class AdgenerationBidder implements Bidder<Void> {
     private static MultiMap resolveHeaders(Device device) {
         final MultiMap headers = HttpUtil.headers();
 
-        final String userAgent = device != null ? device.getUa() : null;
-        if (StringUtils.isNotBlank(userAgent)) {
-            headers.add("User-Agent", userAgent);
+        if (device != null) {
+            HttpUtil.addHeaderIfValueIsNotEmpty(headers, HttpUtil.USER_AGENT_HEADER, device.getUa());
+            HttpUtil.addHeaderIfValueIsNotEmpty(headers, HttpUtil.X_FORWARDED_FOR_HEADER, device.getIp());
         }
+
         return headers;
     }
 
     @Override
-    public Result<List<BidderBid>> makeBids(HttpCall<Void> httpCall, BidRequest bidRequest) {
+    public Result<List<BidderBid>> makeBids(BidderCall<Void> httpCall, BidRequest bidRequest) {
         try {
             final AdgenerationResponse adgenerationResponse = decodeBodyToBidResponse(httpCall.getResponse());
             if (CollectionUtils.isEmpty(adgenerationResponse.getResults())) {
@@ -212,9 +224,12 @@ public class AdgenerationBidder implements Bidder<Void> {
     private String getAdm(AdgenerationResponse adgenerationResponse, String impId) {
         String ad = adgenerationResponse.getAd();
         if (StringUtils.isNotBlank(adgenerationResponse.getVastxml())) {
-            ad = String.format("<body><div id=\"apvad-%s\"></div><script type=\"text/javascript\" id=\"apv\" "
-                            + "src=\"https://cdn.apvdr.com/js/VideoAd.min.js\"></script>%s</body>", impId,
-                    insertVASTMethod(impId, adgenerationResponse.getVastxml()));
+            ad = """
+                    <body>
+                    <div id="apvad-%s"></div>
+                    <script type="text/javascript" id="apv" src="https://cdn.apvdr.com/js/VideoAd.min.js"></script>
+                    %s
+                    </body>""".formatted(impId, insertVASTMethod(impId, adgenerationResponse.getVastxml()));
         }
         final String updateAd = StringUtils.isNotBlank(adgenerationResponse.getBeacon())
                 ? appendChildToBody(ad, adgenerationResponse.getBeacon())
@@ -226,8 +241,12 @@ public class AdgenerationBidder implements Bidder<Void> {
 
     private String insertVASTMethod(String impId, String vastXml) {
         final String replacedVastxml = REPLACE_VAST_XML_PATTERN.matcher(vastXml).replaceAll("");
-        return String.format("<script type=\"text/javascript\"> (function(){ new APV.VideoAd({s:\"%s\"}).load('%s');"
-                + " })(); </script>", impId, replacedVastxml);
+        return """
+                <script type="text/javascript">
+                (function() {
+                    new APV.VideoAd({s:"%s"}).load('%s');
+                })();
+                </script>""".formatted(impId, replacedVastxml);
     }
 
     private String appendChildToBody(String ad, String beacon) {

@@ -5,7 +5,6 @@ import io.vertx.core.eventbus.EventBus;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.apache.commons.lang3.ObjectUtils;
-import org.prebid.server.bidder.BidderCatalog;
 import org.prebid.server.bidder.BidderErrorNotifier;
 import org.prebid.server.bidder.BidderRequestCompletionTrackerFactory;
 import org.prebid.server.bidder.DealsBidderRequestCompletionTrackerFactory;
@@ -14,7 +13,7 @@ import org.prebid.server.bidder.HttpBidderRequester;
 import org.prebid.server.currency.CurrencyConversionService;
 import org.prebid.server.deals.AdminCentralService;
 import org.prebid.server.deals.AlertHttpService;
-import org.prebid.server.deals.DealsProcessor;
+import org.prebid.server.deals.DealsService;
 import org.prebid.server.deals.DeliveryProgressReportFactory;
 import org.prebid.server.deals.DeliveryProgressService;
 import org.prebid.server.deals.DeliveryStatsService;
@@ -23,6 +22,7 @@ import org.prebid.server.deals.PlannerService;
 import org.prebid.server.deals.RegisterService;
 import org.prebid.server.deals.Suspendable;
 import org.prebid.server.deals.TargetingService;
+import org.prebid.server.deals.UserAdditionalInfoService;
 import org.prebid.server.deals.UserService;
 import org.prebid.server.deals.deviceinfo.DeviceInfoService;
 import org.prebid.server.deals.events.AdminEventProcessor;
@@ -69,10 +69,8 @@ import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Configuration
-@ConditionalOnProperty(prefix = "deals", name = "enabled", havingValue = "true")
 public class DealsConfiguration {
 
     @Configuration
@@ -155,7 +153,6 @@ public class DealsConfiguration {
         LineItemService lineItemService(
                 @Value("${deals.max-deals-per-bidder}") int maxDealsPerBidder,
                 TargetingService targetingService,
-                BidderCatalog bidderCatalog,
                 CurrencyConversionService conversionService,
                 ApplicationEventService applicationEventService,
                 @Value("${auction.ad-server-currency}") String adServerCurrency,
@@ -164,7 +161,6 @@ public class DealsConfiguration {
 
             return new LineItemService(maxDealsPerBidder,
                     targetingService,
-                    bidderCatalog,
                     conversionService,
                     applicationEventService,
                     adServerCurrency,
@@ -451,7 +447,6 @@ public class DealsConfiguration {
         SimulationAwareLineItemService lineItemService(
                 @Value("${deals.max-deals-per-bidder}") int maxDealsPerBidder,
                 TargetingService targetingService,
-                BidderCatalog bidderCatalog,
                 CurrencyConversionService conversionService,
                 ApplicationEventService applicationEventService,
                 @Value("${auction.ad-server-currency}") String adServerCurrency,
@@ -461,7 +456,6 @@ public class DealsConfiguration {
             return new SimulationAwareLineItemService(
                     maxDealsPerBidder,
                     targetingService,
-                    bidderCatalog,
                     conversionService,
                     applicationEventService,
                     adServerCurrency,
@@ -551,121 +545,154 @@ public class DealsConfiguration {
         }
     }
 
-    @Bean
-    @ConfigurationProperties
-    DeploymentProperties deploymentProperties() {
-        return new DeploymentProperties();
-    }
+    @Configuration
+    @ConditionalOnExpression("${deals.enabled} == true")
+    public static class DealsMainConfiguration {
 
-    @Bean
-    @ConfigurationProperties(prefix = "deals.planner")
-    PlannerProperties plannerProperties() {
-        return new PlannerProperties();
-    }
+        @Bean
+        @ConfigurationProperties
+        DeploymentProperties deploymentProperties() {
+            return new DeploymentProperties();
+        }
 
-    @Bean
-    @ConfigurationProperties(prefix = "deals.delivery-stats")
-    DeliveryStatsProperties deliveryStatsProperties() {
-        return new DeliveryStatsProperties();
-    }
+        @Bean
+        @ConfigurationProperties(prefix = "deals.planner")
+        PlannerProperties plannerProperties() {
+            return new PlannerProperties();
+        }
 
-    @Bean
-    @ConfigurationProperties(prefix = "deals.delivery-progress")
-    DeliveryProgressProperties deliveryProgressProperties() {
-        return new DeliveryProgressProperties();
-    }
+        @Bean
+        @ConfigurationProperties(prefix = "deals.delivery-stats")
+        DeliveryStatsProperties deliveryStatsProperties() {
+            return new DeliveryStatsProperties();
+        }
 
-    @Bean
-    @ConfigurationProperties(prefix = "deals.user-data")
-    UserDetailsProperties userDetailsProperties() {
-        return new UserDetailsProperties();
-    }
+        @Bean
+        @ConfigurationProperties(prefix = "deals.delivery-progress")
+        DeliveryProgressProperties deliveryProgressProperties() {
+            return new DeliveryProgressProperties();
+        }
 
-    @Bean
-    @ConfigurationProperties(prefix = "deals.alert-proxy")
-    AlertProxyProperties alertProxyProperties() {
-        return new AlertProxyProperties();
-    }
+        @Bean
+        @ConfigurationProperties(prefix = "deals.user-data")
+        UserDetailsProperties userDetailsProperties() {
+            return new UserDetailsProperties();
+        }
 
-    @Bean
-    @ConfigurationProperties(prefix = "deals.simulation")
-    SimulationProperties simulationProperties() {
-        return new SimulationProperties();
-    }
+        @Bean
+        @ConfigurationProperties(prefix = "deals.alert-proxy")
+        AlertProxyProperties alertProxyProperties() {
+            return new AlertProxyProperties();
+        }
 
-    @Bean
-    BidderRequestCompletionTrackerFactory bidderRequestCompletionTrackerFactory() {
-        return new DealsBidderRequestCompletionTrackerFactory();
-    }
+        @Bean
+        @ConfigurationProperties(prefix = "deals.simulation")
+        SimulationProperties simulationProperties() {
+            return new SimulationProperties();
+        }
 
-    @Bean
-    DealsProcessor dealsProcessor(
-            LineItemService lineItemService,
-            @Autowired(required = false) DeviceInfoService deviceInfoService,
-            @Autowired(required = false) GeoLocationService geoLocationService,
-            UserService userService,
-            Clock clock,
-            JacksonMapper mapper,
-            CriteriaLogManager criteriaLogManager) {
+        @Bean
+        BidderRequestCompletionTrackerFactory bidderRequestCompletionTrackerFactory() {
+            return new DealsBidderRequestCompletionTrackerFactory();
+        }
 
-        return new DealsProcessor(
-                lineItemService, deviceInfoService, geoLocationService, userService, clock, mapper, criteriaLogManager);
-    }
+        @Bean
+        UserAdditionalInfoService userAdditionalInfoService(
+                LineItemService lineItemService,
+                @Autowired(required = false) DeviceInfoService deviceInfoService,
+                @Autowired(required = false) GeoLocationService geoLocationService,
+                UserService userService,
+                Clock clock,
+                JacksonMapper mapper,
+                CriteriaLogManager criteriaLogManager) {
 
-    @Bean
-    DeliveryProgressReportFactory deliveryProgressReportFactory(
-            DeploymentProperties deploymentProperties,
-            @Value("${deals.delivery-progress-report.competitors-number}") int competitorsNumber,
-            LineItemService lineItemService) {
+            return new UserAdditionalInfoService(
+                    lineItemService,
+                    deviceInfoService,
+                    geoLocationService,
+                    userService,
+                    clock,
+                    mapper,
+                    criteriaLogManager);
+        }
 
-        return new DeliveryProgressReportFactory(
-                deploymentProperties.toComponentProperties(), competitorsNumber, lineItemService);
-    }
+        @Bean
+        DealsService dealsService(LineItemService lineItemService,
+                                  JacksonMapper mapper,
+                                  CriteriaLogManager criteriaLogManager) {
 
-    @Bean
-    AlertHttpService alertHttpService(JacksonMapper mapper,
-                                      HttpClient httpClient,
-                                      Clock clock,
-                                      DeploymentProperties deploymentProperties,
-                                      AlertProxyProperties alertProxyProperties) {
-        return new AlertHttpService(mapper, httpClient, clock, deploymentProperties.toComponentProperties(),
-                alertProxyProperties.toComponentProperties());
-    }
+            return new DealsService(lineItemService, mapper, criteriaLogManager);
+        }
 
-    @Bean
-    TargetingService targetingService(JacksonMapper mapper) {
-        return new TargetingService(mapper);
-    }
+        @Bean
+        DeliveryProgressReportFactory deliveryProgressReportFactory(
+                DeploymentProperties deploymentProperties,
+                @Value("${deals.delivery-progress-report.competitors-number}") int competitorsNumber,
+                LineItemService lineItemService) {
 
-    @Bean
-    AdminCentralService adminCentralService(
-            CriteriaManager criteriaManager,
-            LineItemService lineItemService,
-            DeliveryProgressService deliveryProgressService,
-            @Autowired(required = false) @Qualifier("settingsCache") SettingsCache settingsCache,
-            @Autowired(required = false) @Qualifier("ampSettingsCache") SettingsCache ampSettingsCache,
-            @Autowired(required = false) CachingApplicationSettings cachingApplicationSettings,
-            JacksonMapper mapper,
-            List<Suspendable> suspendables) {
-        return new AdminCentralService(criteriaManager, lineItemService, deliveryProgressService,
-                settingsCache, ampSettingsCache, cachingApplicationSettings, mapper, suspendables);
-    }
+            return new DeliveryProgressReportFactory(
+                    deploymentProperties.toComponentProperties(), competitorsNumber, lineItemService);
+        }
 
-    @Bean
-    ApplicationEventService applicationEventService(EventBus eventBus) {
-        return new ApplicationEventService(eventBus);
-    }
+        @Bean
+        AlertHttpService alertHttpService(JacksonMapper mapper,
+                                          HttpClient httpClient,
+                                          Clock clock,
+                                          DeploymentProperties deploymentProperties,
+                                          AlertProxyProperties alertProxyProperties) {
 
-    @Bean
-    AdminEventService adminEventService(EventBus eventBus) {
-        return new AdminEventService(eventBus);
-    }
+            return new AlertHttpService(
+                    mapper,
+                    httpClient,
+                    clock,
+                    deploymentProperties.toComponentProperties(),
+                    alertProxyProperties.toComponentProperties());
+        }
 
-    @Bean
-    EventServiceInitializer eventServiceInitializer(List<ApplicationEventProcessor> applicationEventProcessors,
-                                                    List<AdminEventProcessor> adminEventProcessors,
-                                                    EventBus eventBus) {
-        return new EventServiceInitializer(applicationEventProcessors, adminEventProcessors, eventBus);
+        @Bean
+        TargetingService targetingService(JacksonMapper mapper) {
+            return new TargetingService(mapper);
+        }
+
+        @Bean
+        AdminCentralService adminCentralService(
+                CriteriaManager criteriaManager,
+                LineItemService lineItemService,
+                DeliveryProgressService deliveryProgressService,
+                @Autowired(required = false) @Qualifier("settingsCache") SettingsCache settingsCache,
+                @Autowired(required = false) @Qualifier("ampSettingsCache") SettingsCache ampSettingsCache,
+                @Autowired(required = false) CachingApplicationSettings cachingApplicationSettings,
+                JacksonMapper mapper,
+                List<Suspendable> suspendables) {
+
+            return new AdminCentralService(
+                    criteriaManager,
+                    lineItemService,
+                    deliveryProgressService,
+                    settingsCache,
+                    ampSettingsCache,
+                    cachingApplicationSettings,
+                    mapper,
+                    suspendables);
+        }
+
+        @Bean
+        ApplicationEventService applicationEventService(EventBus eventBus) {
+            return new ApplicationEventService(eventBus);
+        }
+
+        @Bean
+        AdminEventService adminEventService(EventBus eventBus) {
+            return new AdminEventService(eventBus);
+        }
+
+        @Bean
+        EventServiceInitializer eventServiceInitializer(List<ApplicationEventProcessor> applicationEventProcessors,
+                                                        List<AdminEventProcessor> adminEventProcessors,
+                                                        EventBus eventBus) {
+
+            return new EventServiceInitializer(applicationEventProcessors, adminEventProcessors, eventBus);
+        }
     }
 
     @Validated
@@ -807,7 +834,7 @@ public class DealsConfiguration {
         public org.prebid.server.deals.model.UserDetailsProperties toComponentProperties() {
             final List<org.prebid.server.deals.model.UserIdRule> componentUserIds = getUserIds().stream()
                     .map(DealsConfiguration.UserIdRule::toComponentProperties)
-                    .collect(Collectors.toList());
+                    .toList();
 
             return org.prebid.server.deals.model.UserDetailsProperties.of(
                     getUserDetailsEndpoint(), getWinEventEndpoint(), getTimeout(), componentUserIds);

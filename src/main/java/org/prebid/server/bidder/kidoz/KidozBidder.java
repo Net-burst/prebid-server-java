@@ -13,8 +13,8 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.prebid.server.bidder.Bidder;
 import org.prebid.server.bidder.model.BidderBid;
+import org.prebid.server.bidder.model.BidderCall;
 import org.prebid.server.bidder.model.BidderError;
-import org.prebid.server.bidder.model.HttpCall;
 import org.prebid.server.bidder.model.HttpRequest;
 import org.prebid.server.bidder.model.Result;
 import org.prebid.server.exception.PreBidException;
@@ -30,12 +30,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 public class KidozBidder implements Bidder<BidRequest> {
 
     private static final TypeReference<ExtPrebid<?, ExtImpKidoz>> KIDOZ_EXT_TYPE_REFERENCE =
-            new TypeReference<ExtPrebid<?, ExtImpKidoz>>() {
+            new TypeReference<>() {
             };
 
     private final String endpointUrl;
@@ -53,9 +52,8 @@ public class KidozBidder implements Bidder<BidRequest> {
 
         for (Imp imp : request.getImp()) {
             try {
-                final Imp validImp = validateImp(imp);
-                final ExtImpKidoz extImpKidoz = parseAndValidateImpExt(imp);
-                result.add(createSingleRequest(validImp, request, endpointUrl));
+                validateImp(imp);
+                result.add(createSingleRequest(request, imp));
             } catch (PreBidException e) {
                 errors.add(BidderError.badInput(e.getMessage()));
             }
@@ -64,21 +62,21 @@ public class KidozBidder implements Bidder<BidRequest> {
         return Result.of(result, errors);
     }
 
-    private HttpRequest<BidRequest> createSingleRequest(Imp imp, BidRequest request, String url) {
+    private HttpRequest<BidRequest> createSingleRequest(BidRequest request, Imp imp) {
         final BidRequest outgoingRequest = request.toBuilder().imp(Collections.singletonList(imp)).build();
 
         final MultiMap headers = HttpUtil.headers().add(HttpUtil.X_OPENRTB_VERSION_HEADER, "2.5");
 
         return HttpRequest.<BidRequest>builder()
                 .method(HttpMethod.POST)
-                .uri(url)
+                .uri(endpointUrl)
                 .headers(headers)
                 .body(mapper.encodeToBytes(outgoingRequest))
                 .payload(outgoingRequest)
                 .build();
     }
 
-    private Imp validateImp(Imp imp) {
+    private void validateImp(Imp imp) {
         if (imp.getBanner() == null && imp.getVideo() == null) {
             throw new PreBidException("Kidoz only supports banner or video ads");
         }
@@ -90,18 +88,17 @@ public class KidozBidder implements Bidder<BidRequest> {
             }
         }
 
-        return imp;
-    }
-
-    private ExtImpKidoz parseAndValidateImpExt(Imp imp) {
         final ExtImpKidoz extImpKidoz;
         try {
-            extImpKidoz = mapper.mapper().convertValue(imp.getExt(), KIDOZ_EXT_TYPE_REFERENCE)
-                    .getBidder();
+            extImpKidoz = mapper.mapper().convertValue(imp.getExt(), KIDOZ_EXT_TYPE_REFERENCE).getBidder();
         } catch (IllegalArgumentException e) {
             throw new PreBidException(e.getMessage());
         }
 
+        validateImpExt(extImpKidoz);
+    }
+
+    private static void validateImpExt(ExtImpKidoz extImpKidoz) {
         if (extImpKidoz == null) {
             throw new PreBidException("impression extensions required");
         }
@@ -113,12 +110,10 @@ public class KidozBidder implements Bidder<BidRequest> {
         if (StringUtils.isBlank(extImpKidoz.getPublisherID())) {
             throw new PreBidException("Kidoz publisher_id required");
         }
-
-        return extImpKidoz;
     }
 
     @Override
-    public Result<List<BidderBid>> makeBids(HttpCall<BidRequest> httpCall, BidRequest bidRequest) {
+    public Result<List<BidderBid>> makeBids(BidderCall<BidRequest> httpCall, BidRequest bidRequest) {
         try {
             final BidResponse bidResponse = mapper.decodeValue(httpCall.getResponse().getBody(), BidResponse.class);
             return extractBids(httpCall.getRequest().getPayload(), bidResponse);
@@ -139,7 +134,7 @@ public class KidozBidder implements Bidder<BidRequest> {
                 .flatMap(Collection::stream)
                 .map(bid -> bidFromResponse(bidRequest.getImp(), bid, bidResponse.getCur(), errors))
                 .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+                .toList();
         return Result.of(bidderBids, errors);
     }
 
@@ -167,6 +162,6 @@ public class KidozBidder implements Bidder<BidRequest> {
                 }
             }
         }
-        throw new PreBidException(String.format("Failed to find impression %s", impId));
+        throw new PreBidException("Failed to find impression " + impId);
     }
 }

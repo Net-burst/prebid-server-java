@@ -1190,15 +1190,20 @@ public class BasicCategoryMappingServiceTest extends VertxTest {
     }
 
     private static BidderResponse givenBidderResponse(String bidder, BidderBid... bidderBids) {
-        return BidderResponse.of(bidder, BidderSeatBid.of(asList(bidderBids), null, null), 100);
+        return BidderResponse.of(bidder, BidderSeatBid.of(List.of(bidderBids)), 100);
     }
 
     private static BidderBid givenBidderBid(Bid bid, BidType bidType, Integer duration) {
-        return BidderBid.of(bid, bidType, null, 5, ExtBidPrebidVideo.of(duration, null));
+        return givenBidderBid(bid, bidType, duration, null);
     }
 
     private static BidderBid givenBidderBid(Bid bid, BidType bidType, Integer duration, String primaryCategory) {
-        return BidderBid.of(bid, bidType, null, 5, ExtBidPrebidVideo.of(duration, primaryCategory));
+        return BidderBid.builder()
+                .bid(bid)
+                .type(bidType)
+                .dealPriority(5)
+                .videoInfo(ExtBidPrebidVideo.of(duration, primaryCategory))
+                .build();
     }
 
     private static Bid givenBid(String bidId, String impId, String price, List<String> cat) {

@@ -14,10 +14,6 @@ public enum BooleanOperator {
         this.value = value;
     }
 
-    public String value() {
-        return value;
-    }
-
     public static boolean isBooleanOperator(String candidate) {
         return Arrays.stream(BooleanOperator.values()).anyMatch(op -> op.value.equals(candidate));
     }
@@ -28,6 +24,6 @@ public enum BooleanOperator {
                 return op;
             }
         }
-        throw new IllegalArgumentException(String.format("Unrecognized boolean operator: %s", candidate));
+        throw new IllegalArgumentException("Unrecognized boolean operator: " + candidate);
     }
 }

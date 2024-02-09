@@ -17,7 +17,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 public abstract class PurposeStrategy {
 
@@ -56,7 +55,7 @@ public abstract class PurposeStrategy {
         final Collection<VendorPermissionWithGvl> excludedVendors = excludedVendors(vendorPermissions, purpose);
         final Collection<VendorPermissionWithGvl> vendorForPurpose = vendorPermissions.stream()
                 .filter(vendorPermission -> !excludedVendors.contains(vendorPermission))
-                .collect(Collectors.toList());
+                .toList();
 
         allowedByTypeStrategy(vendorConsent, purpose, vendorForPurpose, excludedVendors).stream()
                 .map(VendorPermission::getPrivacyEnforcementAction)
@@ -72,7 +71,7 @@ public abstract class PurposeStrategy {
 
         return vendorPermissions.stream()
                 .map(VendorPermissionWithGvl::getVendorPermission)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private Collection<VendorPermission> allowedByTypeStrategy(TCString vendorConsent,
@@ -91,12 +90,11 @@ public abstract class PurposeStrategy {
         }
 
         // Full by default
-        if (purposeType == null || Objects.equals(purposeType, EnforcePurpose.full)) {
+        if (purposeType == null || purposeType.equals(EnforcePurpose.full)) {
             return allowedByFullTypeStrategy(vendorConsent, isEnforceVendors, vendorForPurpose, excludedVendors);
         }
 
-        throw new IllegalArgumentException(
-                String.format("Invalid type strategy provided. no/base/full != %s", purposeType));
+        throw new IllegalArgumentException("Invalid type strategy provided. no/base/full != " + purposeType);
     }
 
     protected Collection<VendorPermissionWithGvl> excludedVendors(Collection<VendorPermissionWithGvl> vendorPermissions,
@@ -107,7 +105,7 @@ public abstract class PurposeStrategy {
         return CollectionUtils.isEmpty(bidderNameExceptions)
                 ? Collections.emptyList()
                 : CollectionUtils.select(vendorPermissions, vendorPermission ->
-                        bidderNameExceptions.contains(vendorPermission.getVendorPermission().getBidderName()));
+                bidderNameExceptions.contains(vendorPermission.getVendorPermission().getBidderName()));
     }
 
     protected Collection<VendorPermission> allowedByBasicTypeStrategy(

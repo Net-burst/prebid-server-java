@@ -2,6 +2,7 @@ package org.prebid.server.auction;
 
 import com.iab.openrtb.request.BidRequest;
 import com.iab.openrtb.request.Device;
+import com.iab.openrtb.request.Eid;
 import com.iab.openrtb.request.Geo;
 import com.iab.openrtb.request.Imp;
 import com.iab.openrtb.request.Regs;
@@ -18,6 +19,8 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.prebid.server.VertxTest;
+import org.prebid.server.activity.Activity;
+import org.prebid.server.activity.infrastructure.ActivityInfrastructure;
 import org.prebid.server.assertion.FutureAssertion;
 import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.auction.model.BidderPrivacyResult;
@@ -27,6 +30,7 @@ import org.prebid.server.bidder.BidderInfo;
 import org.prebid.server.exception.InvalidRequestException;
 import org.prebid.server.execution.Timeout;
 import org.prebid.server.execution.TimeoutFactory;
+import org.prebid.server.geolocation.CountryCodeMapper;
 import org.prebid.server.geolocation.model.GeoInfo;
 import org.prebid.server.metric.MetricName;
 import org.prebid.server.metric.Metrics;
@@ -41,17 +45,17 @@ import org.prebid.server.privacy.gdpr.model.TcfContext;
 import org.prebid.server.privacy.gdpr.model.TcfResponse;
 import org.prebid.server.privacy.model.Privacy;
 import org.prebid.server.privacy.model.PrivacyContext;
-import org.prebid.server.proto.openrtb.ext.request.ExtRegs;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequest;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebid;
 import org.prebid.server.proto.openrtb.ext.request.ExtUser;
-import org.prebid.server.proto.openrtb.ext.request.ExtUserEid;
 import org.prebid.server.proto.openrtb.ext.request.ExtUserPrebid;
 import org.prebid.server.proto.request.CookieSyncRequest;
 import org.prebid.server.settings.model.Account;
 import org.prebid.server.settings.model.AccountCcpaConfig;
 import org.prebid.server.settings.model.AccountPrivacyConfig;
 import org.prebid.server.settings.model.EnabledForRequestType;
+import org.prebid.server.spring.config.bidder.model.CompressionType;
+import org.prebid.server.spring.config.bidder.model.Ortb;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -83,8 +87,8 @@ import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 public class PrivacyEnforcementServiceTest extends VertxTest {
 
@@ -105,6 +109,10 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
     private IpAddressHelper ipAddressHelper;
     @Mock
     private Metrics metrics;
+    @Mock
+    private CountryCodeMapper countryCodeMapper;
+    @Mock
+    private ActivityInfrastructure activityInfrastructure;
 
     private PrivacyEnforcementService privacyEnforcementService;
 
@@ -122,42 +130,55 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         given(ipAddressHelper.anonymizeIpv6(eq("2001:0db8:85a3:0000:0000:8a2e:0370:7334")))
                 .willReturn("2001:0db8:85a3:0000::");
 
+        given(activityInfrastructure.isAllowed(any(), any()))
+                .willReturn(true);
+
         timeout = new TimeoutFactory(Clock.fixed(Instant.now(), ZoneId.systemDefault())).create(500);
 
         privacyExtractor = new PrivacyExtractor();
 
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, false, false);
+                metrics, countryCodeMapper, false, false);
     }
 
     @Test
     public void contextFromBidRequestShouldReturnTcfContextForCoppa() {
         // given
         final BidRequest bidRequest = BidRequest.builder()
-                .regs(Regs.of(1, null))
+                .regs(Regs.builder().coppa(1).build())
                 .build();
 
         final TcfContext tcfContext = TcfContext.builder()
-                .gdpr("1")
+                .inGdprScope(true)
                 .consentString("consent")
                 .consent(TCStringEmpty.create())
+                .warnings(emptyList())
                 .build();
-        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any(), any()))
+        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(tcfContext));
 
         final AuctionContext auctionContext = AuctionContext.builder()
                 .bidRequest(bidRequest)
                 .account(Account.empty("account"))
                 .prebidErrors(new ArrayList<>())
+                .debugWarnings(new ArrayList<>())
                 .build();
 
         // when
         final Future<PrivacyContext> privacyContext = privacyEnforcementService.contextFromBidRequest(auctionContext);
 
         // then
-        FutureAssertion.assertThat(privacyContext)
-                .succeededWith(PrivacyContext.of(Privacy.of(EMPTY, EMPTY, Ccpa.EMPTY, 1), tcfContext));
+        final Privacy privacy = Privacy.builder()
+                .gdpr(EMPTY)
+                .consentString(EMPTY)
+                .ccpa(Ccpa.EMPTY)
+                .coppa(1)
+                .gpp(EMPTY)
+                .gppSid(emptyList())
+                .build();
+
+        FutureAssertion.assertThat(privacyContext).succeededWith(PrivacyContext.of(privacy, tcfContext));
     }
 
     @Test
@@ -165,21 +186,20 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         final String referer = "Referer";
         final BidRequest bidRequest = BidRequest.builder()
-                .regs(Regs.of(null, ExtRegs.of(1, "1YYY")))
+                .regs(Regs.builder().gdpr(1).usPrivacy("1YYY").build())
                 .user(User.builder()
-                        .ext(ExtUser.builder()
-                                .consent("consent")
-                                .build())
+                        .consent("consent")
                         .build())
                 .site(Site.builder().ref(referer).build())
                 .build();
 
         final TcfContext tcfContext = TcfContext.builder()
-                .gdpr("1")
+                .inGdprScope(true)
                 .consentString("consent")
                 .consent(TCStringEmpty.create())
+                .warnings(emptyList())
                 .build();
-        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any(), any()))
+        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(tcfContext));
 
         final String accountId = "account";
@@ -190,30 +210,36 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .account(Account.empty(accountId))
                 .requestTypeMetric(requestType)
                 .prebidErrors(new ArrayList<>())
+                .debugWarnings(new ArrayList<>())
                 .build();
 
         // when
         final Future<PrivacyContext> privacyContext = privacyEnforcementService.contextFromBidRequest(auctionContext);
 
         // then
-        final Privacy privacy = Privacy.of("1", "consent", Ccpa.of("1YYY"), 0);
+        final Privacy privacy = Privacy.builder()
+                .gdpr("1")
+                .consentString("consent")
+                .ccpa(Ccpa.of("1YYY"))
+                .coppa(0)
+                .gpp(EMPTY)
+                .gppSid(emptyList())
+                .build();
         FutureAssertion.assertThat(privacyContext).succeededWith(PrivacyContext.of(privacy, tcfContext));
 
         final RequestLogInfo expectedRequestLogInfo = RequestLogInfo.of(requestType, referer, accountId);
         verify(tcfDefinerService).resolveTcfContext(
                 eq(privacy), isNull(), isNull(), isNull(), same(requestType),
-                eq(expectedRequestLogInfo), isNull(), any());
+                eq(expectedRequestLogInfo), isNull());
     }
 
     @Test
     public void contextFromBidRequestShouldReturnTcfContextWithIpMasked() {
         // given
         final BidRequest bidRequest = BidRequest.builder()
-                .regs(Regs.of(null, ExtRegs.of(1, "1YYY")))
+                .regs(Regs.builder().gdpr(1).usPrivacy("1YYY").build())
                 .user(User.builder()
-                        .ext(ExtUser.builder()
-                                .consent("consent")
-                                .build())
+                        .consent("consent")
                         .build())
                 .device(Device.builder()
                         .lmt(1)
@@ -224,14 +250,15 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         given(ipAddressHelper.maskIpv4(any())).willReturn("ip-masked");
 
         final TcfContext tcfContext = TcfContext.builder()
-                .gdpr("1")
+                .inGdprScope(true)
                 .consentString("consent")
                 .consent(TCStringEmpty.create())
                 .ipAddress("ip-masked")
                 .inEea(false)
                 .geoInfo(GeoInfo.builder().vendor("v").country("ua").build())
+                .warnings(emptyList())
                 .build();
-        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any(), any()))
+        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(tcfContext));
 
         final AuctionContext auctionContext = AuctionContext.builder()
@@ -239,17 +266,25 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .account(Account.empty("account"))
                 .requestTypeMetric(MetricName.openrtb2web)
                 .prebidErrors(new ArrayList<>())
+                .debugWarnings(new ArrayList<>())
                 .build();
 
         // when
         final Future<PrivacyContext> privacyContext = privacyEnforcementService.contextFromBidRequest(auctionContext);
 
         // then
-        final Privacy privacy = Privacy.of("1", "consent", Ccpa.of("1YYY"), 0);
+        final Privacy privacy = Privacy.builder()
+                .gdpr("1")
+                .consentString("consent")
+                .ccpa(Ccpa.of("1YYY"))
+                .coppa(0)
+                .gpp(EMPTY)
+                .gppSid(emptyList())
+                .build();
         FutureAssertion.assertThat(privacyContext).succeededWith(PrivacyContext.of(privacy, tcfContext, "ip-masked"));
 
         verify(tcfDefinerService).resolveTcfContext(
-                eq(privacy), isNull(), eq("ip-masked"), isNull(), same(MetricName.openrtb2web), any(), isNull(), any());
+                eq(privacy), isNull(), eq("ip-masked"), isNull(), same(MetricName.openrtb2web), any(), isNull());
     }
 
     @Test
@@ -262,7 +297,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                         .build())
                 .build();
         given(ipAddressHelper.anonymizeIpv6(any())).willReturn("ip-masked");
-        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any(), any()))
+        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(TcfContext.builder().build()));
         final AuctionContext auctionContext = AuctionContext.builder()
                 .bidRequest(bidRequest)
@@ -274,7 +309,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         privacyEnforcementService.contextFromBidRequest(auctionContext);
 
         // then
-        verify(tcfDefinerService).resolveTcfContext(any(), any(), eq("ip-masked"), any(), any(), any(), any(), any());
+        verify(tcfDefinerService).resolveTcfContext(any(), any(), eq("ip-masked"), any(), any(), any(), any());
     }
 
     @Test
@@ -285,7 +320,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                         .ipv6("ipv6")
                         .build())
                 .build();
-        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any(), any()))
+        given(tcfDefinerService.resolveTcfContext(any(), any(), any(), any(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(TcfContext.builder().build()));
         final AuctionContext auctionContext = AuctionContext.builder()
                 .bidRequest(bidRequest)
@@ -297,7 +332,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         privacyEnforcementService.contextFromBidRequest(auctionContext);
 
         // then
-        verify(tcfDefinerService).resolveTcfContext(any(), any(), eq("ipv6"), any(), any(), any(), any(), any());
+        verify(tcfDefinerService).resolveTcfContext(any(), any(), eq("ipv6"), any(), any(), any(), any());
     }
 
     @Test
@@ -316,7 +351,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         given(ipAddressHelper.toIpAddress(anyString())).willReturn(IpAddress.of("ip", IpAddress.IP.v4));
 
         final TcfContext tcfContext = TcfContext.builder()
-                .gdpr("1")
+                .inGdprScope(true)
                 .consentString("consent")
                 .consent(TCStringEmpty.create())
                 .build();
@@ -330,7 +365,14 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 httpRequest, Account.empty(accountId), null);
 
         // then
-        final Privacy privacy = Privacy.of("1", "consent", Ccpa.EMPTY, 0);
+        final Privacy privacy = Privacy.builder()
+                .gdpr("1")
+                .consentString("consent")
+                .ccpa(Ccpa.EMPTY)
+                .coppa(0)
+                .gpp(EMPTY)
+                .gppSid(emptyList())
+                .build();
         FutureAssertion.assertThat(privacyContext).succeededWith(PrivacyContext.of(privacy, tcfContext));
 
         final RequestLogInfo expectedRequestLogInfo = RequestLogInfo.of(MetricName.setuid, null, accountId);
@@ -356,7 +398,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .build();
 
         final TcfContext tcfContext = TcfContext.builder()
-                .gdpr("1")
+                .inGdprScope(true)
                 .consentString("consent")
                 .consent(TCStringEmpty.create())
                 .build();
@@ -370,7 +412,14 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 cookieSyncRequest, httpRequest, Account.empty(accountId), null);
 
         // then
-        final Privacy privacy = Privacy.of("1", "consent", Ccpa.of("1YYY"), 0);
+        final Privacy privacy = Privacy.builder()
+                .gdpr("1")
+                .consentString("consent")
+                .ccpa(Ccpa.of("1YYY"))
+                .coppa(0)
+                .gpp(EMPTY)
+                .gppSid(emptyList())
+                .build();
         FutureAssertion.assertThat(privacyContext).succeededWith(PrivacyContext.of(privacy, tcfContext));
 
         final RequestLogInfo expectedRequestLogInfo = RequestLogInfo.of(MetricName.cookiesync, null, accountId);
@@ -415,7 +464,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, true, false);
+                metrics, countryCodeMapper, true, false);
 
         given(tcfDefinerService.resultForBidderNames(anySet(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(TcfResponse.of(true, emptyMap(), null)));
@@ -455,7 +504,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, false, true);
+                metrics, countryCodeMapper, false, true);
 
         given(tcfDefinerService.resultForBidderNames(anySet(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(TcfResponse.of(true, emptyMap(), null)));
@@ -479,13 +528,17 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                         .privacy(AccountPrivacyConfig.of(
                                 null,
                                 AccountCcpaConfig.builder()
-                                        .enabledForRequestType(EnabledForRequestType.of(false, false, true, false))
-                                        .build()))
+                                        .enabledForRequestType(
+                                                EnabledForRequestType.of(false, false, true, false, false))
+                                        .build(),
+                                null,
+                                null))
                         .build())
                 .requestTypeMetric(MetricName.openrtb2app)
                 .bidRequest(bidRequest)
                 .timeout(timeout)
                 .privacyContext(privacyContext)
+                .activityInfrastructure(activityInfrastructure)
                 .build();
 
         // when
@@ -507,55 +560,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, false, true);
-
-        given(tcfDefinerService.resultForBidderNames(anySet(), any(), any(), any()))
-                .willReturn(Future.succeededFuture(TcfResponse.of(true, emptyMap(), null)));
-
-        given(bidderCatalog.bidderInfoByName(BIDDER_NAME)).willReturn(givenBidderInfo(1, true));
-
-        final User user = notMaskedUser(notMaskedExtUser());
-        final Device device = notMaskedDevice();
-        final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
-
-        final BidRequest bidRequest = givenBidRequest(givenSingleImp(
-                        singletonMap(BIDDER_NAME, 1)),
-                bidRequestBuilder -> bidRequestBuilder
-                        .user(user)
-                        .device(device));
-
-        final PrivacyContext privacyContext = givenPrivacyContext("1", Ccpa.of("1YYY"), 0);
-
-        final AuctionContext context = AuctionContext.builder()
-                .account(Account.builder()
-                        .privacy(AccountPrivacyConfig.of(null, AccountCcpaConfig.builder().enabled(true).build()))
-                        .build())
-                .requestTypeMetric(MetricName.openrtb2app)
-                .bidRequest(bidRequest)
-                .timeout(timeout)
-                .privacyContext(privacyContext)
-                .build();
-
-        // when
-        final List<BidderPrivacyResult> result = privacyEnforcementService
-                .mask(context, bidderToUser, singletonList(BIDDER_NAME), aliases)
-                .result();
-
-        // then
-        final BidderPrivacyResult expected = BidderPrivacyResult.builder()
-                .requestBidder(BIDDER_NAME)
-                .user(userTcfMasked(extUserIdsMasked()))
-                .device(deviceTcfMasked())
-                .build();
-        assertThat(result).isEqualTo(singletonList(expected));
-    }
-
-    @Test
-    public void shouldMaskForCcpaWhenAccountHasCcpaConfigEnabled() {
-        // given
-        privacyEnforcementService = new PrivacyEnforcementService(
-                bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, false, true);
+                metrics, countryCodeMapper, false, true);
 
         given(tcfDefinerService.resultForBidderNames(anySet(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(TcfResponse.of(true, emptyMap(), null)));
@@ -578,12 +583,68 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .account(Account.builder()
                         .privacy(AccountPrivacyConfig.of(
                                 null,
-                                AccountCcpaConfig.builder().enabled(true).build()))
+                                AccountCcpaConfig.builder().enabled(true).build(),
+                                null,
+                                null))
+                        .build())
+                .requestTypeMetric(MetricName.openrtb2app)
+                .bidRequest(bidRequest)
+                .timeout(timeout)
+                .privacyContext(privacyContext)
+                .activityInfrastructure(activityInfrastructure)
+                .build();
+
+        // when
+        final List<BidderPrivacyResult> result = privacyEnforcementService
+                .mask(context, bidderToUser, singletonList(BIDDER_NAME), aliases)
+                .result();
+
+        // then
+        final BidderPrivacyResult expected = BidderPrivacyResult.builder()
+                .requestBidder(BIDDER_NAME)
+                .user(userTcfMasked(extUserIdsMasked()))
+                .device(deviceTcfMasked())
+                .build();
+        assertThat(result).isEqualTo(singletonList(expected));
+    }
+
+    @Test
+    public void shouldMaskForCcpaWhenAccountHasCcpaConfigEnabled() {
+        // given
+        privacyEnforcementService = new PrivacyEnforcementService(
+                bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
+                metrics, countryCodeMapper, false, true);
+
+        given(tcfDefinerService.resultForBidderNames(anySet(), any(), any(), any()))
+                .willReturn(Future.succeededFuture(TcfResponse.of(true, emptyMap(), null)));
+
+        given(bidderCatalog.bidderInfoByName(BIDDER_NAME)).willReturn(givenBidderInfo(1, true));
+
+        final User user = notMaskedUser(notMaskedExtUser());
+        final Device device = notMaskedDevice();
+        final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
+
+        final BidRequest bidRequest = givenBidRequest(givenSingleImp(
+                        singletonMap(BIDDER_NAME, 1)),
+                bidRequestBuilder -> bidRequestBuilder
+                        .user(user)
+                        .device(device));
+
+        final PrivacyContext privacyContext = givenPrivacyContext("1", Ccpa.of("1YYY"), 0);
+
+        final AuctionContext context = AuctionContext.builder()
+                .account(Account.builder()
+                        .privacy(AccountPrivacyConfig.of(
+                                null,
+                                AccountCcpaConfig.builder().enabled(true).build(),
+                                null,
+                                null))
                         .build())
                 .requestTypeMetric(null)
                 .bidRequest(bidRequest)
                 .timeout(timeout)
                 .privacyContext(privacyContext)
+                .activityInfrastructure(activityInfrastructure)
                 .build();
 
         // when
@@ -703,7 +764,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, false, true);
+                metrics, countryCodeMapper, false, true);
 
         given(tcfDefinerService.resultForBidderNames(any(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(
@@ -748,7 +809,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
 
         final User user = notMaskedUser();
         final Device device = givenNotMaskedDevice(deviceBuilder -> deviceBuilder.lmt(1));
-        final Regs regs = Regs.of(0, null);
+        final Regs regs = Regs.builder().coppa(0).build();
         final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
 
         final BidRequest bidRequest = givenBidRequest(givenSingleImp(
@@ -845,6 +906,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .user(givenNotMaskedUser(userBuilder -> userBuilder
                         .id(null)
                         .buyeruid(null)
+                        .consent(null)
                         .ext(extUserIdsMasked())))
                 .device(notMaskedDevice())
                 .requestBidder(BIDDER_NAME)
@@ -867,12 +929,9 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .willReturn(Future.succeededFuture(
                         TcfResponse.of(true, singletonMap(BIDDER_NAME, privacyEnforcementAction), null)));
 
-        final ExtUser extUser = ExtUser.builder()
-                .eids(singletonList(ExtUserEid.of("Test", "id", emptyList(), null)))
-                .build();
         final User user = User.builder()
                 .buyeruid(BUYER_UID)
-                .ext(extUser)
+                .eids(singletonList(Eid.of("Test", emptyList(), null)))
                 .build();
 
         final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
@@ -1096,8 +1155,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .willReturn(Future.succeededFuture(
                         TcfResponse.of(true, singletonMap(BIDDER_NAME, privacyEnforcementAction), null)));
 
-        final ExtUser extUser = ExtUser.builder().consent("consent").build();
-        final User user = User.builder().gender("gender").ext(extUser).build();
+        final User user = User.builder().gender("gender").consent("consent").build();
         final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
 
         final BidRequest bidRequest = givenBidRequest(givenSingleImp(
@@ -1264,12 +1322,9 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
     @Test
     public void shouldNotReturnUserIfMaskingAppliedAndUserBecameEmptyObject() {
         // given
-        final ExtUser extUser = ExtUser.builder()
-                .eids(singletonList(ExtUserEid.of("Test", "id", emptyList(), null)))
-                .build();
         final User user = User.builder()
                 .buyeruid("buyeruid")
-                .ext(extUser)
+                .eids(singletonList(Eid.of("Test", emptyList(), null)))
                 .build();
         final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
 
@@ -1333,7 +1388,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, true, false);
+                metrics, countryCodeMapper, true, false);
 
         final String bidder1Name = "bidder1Name";
         final String bidder2Name = "bidder2Name";
@@ -1404,7 +1459,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, true, false);
+                metrics, countryCodeMapper, true, false);
 
         given(tcfDefinerService.resultForBidderNames(anySet(), any(), any(), any()))
                 .willReturn(Future.succeededFuture(
@@ -1459,11 +1514,11 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, true, false);
+                metrics, countryCodeMapper, true, false);
 
         final Ccpa ccpa = Ccpa.of("1YYY");
         final Account account = Account.builder()
-                .privacy(AccountPrivacyConfig.of(null, AccountCcpaConfig.builder().enabled(false).build()))
+                .privacy(AccountPrivacyConfig.of(null, AccountCcpaConfig.builder().enabled(false).build(), null, null))
                 .build();
 
         // when and then
@@ -1475,7 +1530,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, true, false);
+                metrics, countryCodeMapper, true, false);
 
         final Ccpa ccpa = Ccpa.of("1YNY");
         final Account account = Account.builder().build();
@@ -1489,13 +1544,15 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, false, true);
+                metrics, countryCodeMapper, false, true);
 
         final Ccpa ccpa = Ccpa.of("1YYY");
         final Account account = Account.builder()
                 .privacy(AccountPrivacyConfig.of(
                         null,
-                        AccountCcpaConfig.builder().enabled(true).build()))
+                        AccountCcpaConfig.builder().enabled(true).build(),
+                        null,
+                        null))
                 .build();
 
         // when and then
@@ -1507,7 +1564,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         // given
         privacyEnforcementService = new PrivacyEnforcementService(
                 bidderCatalog, privacyExtractor, tcfDefinerService, implicitParametersExtractor, ipAddressHelper,
-                metrics, true, false);
+                metrics, countryCodeMapper, true, false);
 
         final Ccpa ccpa = Ccpa.of("1YYY");
         final Account account = Account.builder().build();
@@ -1612,6 +1669,125 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 eq(BIDDER_NAME), eq(MetricName.openrtb2web), eq(true), eq(true), eq(false), eq(false));
     }
 
+    @Test
+    public void shouldMaskCorrespondingToActivitiesRestrictions() {
+        // given
+        given(activityInfrastructure.isAllowed(eq(Activity.TRANSMIT_UFPD), any())).willReturn(false);
+        given(activityInfrastructure.isAllowed(eq(Activity.TRANSMIT_GEO), any())).willReturn(false);
+        given(ipAddressHelper.anonymizeIpv6(eq("2001:0db8:85a3:0000::"))).willReturn("2001:0db8:85a3:0000::");
+
+        final User user = User.builder()
+                .id("id")
+                .buyeruid("buyeruid")
+                .yob(1)
+                .gender("gender")
+                .data(emptyList())
+                .eids(emptyList())
+                .geo(Geo.builder().lon(-85.34321F).lat(189.342323F).build())
+                .ext(ExtUser.builder().data(mapper.createObjectNode()).build())
+                .build();
+        final Device device = notMaskedDevice();
+        final Map<String, User> bidderToUser = singletonMap(BIDDER_NAME, user);
+
+        final BidRequest bidRequest = givenBidRequest(
+                givenSingleImp(singletonMap(BIDDER_NAME, 1)),
+                bidRequestBuilder -> bidRequestBuilder
+                        .user(user)
+                        .device(device));
+
+        final PrivacyContext privacyContext = givenPrivacyContext(null, Ccpa.EMPTY, 0);
+
+        final AuctionContext context = auctionContext(bidRequest, privacyContext);
+
+        // when
+        final List<BidderPrivacyResult> result = privacyEnforcementService
+                .mask(context, bidderToUser, singletonList(BIDDER_NAME), aliases)
+                .result();
+
+        // then
+        final BidderPrivacyResult expected = BidderPrivacyResult.builder()
+                .requestBidder(BIDDER_NAME)
+                .user(User.builder()
+                        .id(null)
+                        .buyeruid(null)
+                        .yob(null)
+                        .gender(null)
+                        .data(null)
+                        .eids(null)
+                        .geo(Geo.builder().lon(-85.34F).lat(189.34F).build())
+                        .ext(null)
+                        .build())
+                .device(deviceTcfMasked())
+                .build();
+        assertThat(result).isEqualTo(singletonList(expected));
+    }
+
+    @Test
+    public void maskUserConsideringActivityRestrictionsShouldReturnSameIfNoRestrictionsApplied() {
+        // given
+        final User user = User.builder().build();
+
+        // when
+        final User result = privacyEnforcementService.maskUserConsideringActivityRestrictions(user, false, false);
+
+        // then
+        assertThat(result).isSameAs(user);
+    }
+
+    @Test
+    public void maskUserConsideringActivityRestrictionsShouldReturnMaskedUser() {
+        // given
+        final User user = User.builder()
+                .id("id")
+                .buyeruid("buyeruid")
+                .yob(1)
+                .gender("gender")
+                .data(emptyList())
+                .eids(emptyList())
+                .geo(Geo.builder().lon(-85.34321F).lat(189.342323F).build())
+                .ext(ExtUser.builder().data(mapper.createObjectNode()).build())
+                .build();
+
+        // when
+        final User result = privacyEnforcementService.maskUserConsideringActivityRestrictions(user, true, true);
+
+        // then
+        assertThat(result).isEqualTo(User.builder()
+                .id(null)
+                .buyeruid(null)
+                .yob(null)
+                .gender(null)
+                .data(null)
+                .eids(null)
+                .geo(Geo.builder().lon(-85.34F).lat(189.34F).build())
+                .ext(null)
+                .build());
+    }
+
+    @Test
+    public void maskDeviceConsideringActivityRestrictionsShouldReturnSameIfNoRestrictionsApplied() {
+        // given
+        final Device device = Device.builder().build();
+
+        // when
+        final Device result = privacyEnforcementService.maskDeviceConsideringActivityRestrictions(device, false, false);
+
+        // then
+        assertThat(result).isSameAs(device);
+    }
+
+    @Test
+    public void maskDeviceConsideringActivityRestrictionsShouldReturnMaskedUser() {
+        // given
+        final Device device = notMaskedDevice();
+
+        // when
+        final Device result = privacyEnforcementService.maskDeviceConsideringActivityRestrictions(device, true, true);
+
+        // then
+        assertThat(result).isEqualTo(deviceTcfMasked());
+    }
+
     private AuctionContext auctionContext(BidRequest bidRequest, PrivacyContext privacyContext) {
         return AuctionContext.builder()
                 .account(Account.builder().build())
@@ -1619,6 +1795,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .bidRequest(bidRequest)
                 .timeout(timeout)
                 .privacyContext(privacyContext)
+                .activityInfrastructure(activityInfrastructure)
                 .build();
     }
 
@@ -1642,7 +1819,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .id("id")
                 .buyeruid(BUYER_UID)
                 .geo(Geo.builder().lon(-85.1245F).lat(189.9531F).country("US").build())
-                .ext(ExtUser.builder().consent("consent").build())
+                .consent("consent")
                 .build();
     }
 
@@ -1651,6 +1828,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
                 .id("id")
                 .buyeruid(BUYER_UID)
                 .geo(Geo.builder().lon(-85.1245F).lat(189.9531F).country("US").build())
+                .eids(singletonList(Eid.of("Test", emptyList(), null)))
                 .ext(extUser)
                 .build();
     }
@@ -1658,7 +1836,6 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
     private static ExtUser notMaskedExtUser() {
         return ExtUser.builder()
                 .digitrust(mapper.createObjectNode())
-                .eids(singletonList(ExtUserEid.of("Test", "id", emptyList(), null)))
                 .prebid(ExtUserPrebid.of(singletonMap("key", "value")))
                 .build();
     }
@@ -1696,7 +1873,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
         return User.builder()
                 .buyeruid(null)
                 .geo(Geo.builder().lon(-85.12F).lat(189.95F).country("US").build())
-                .ext(ExtUser.builder().consent("consent").build())
+                .consent("consent")
                 .build();
     }
 
@@ -1739,7 +1916,7 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
 
     private PrivacyContext givenPrivacyContext(String gdpr, Ccpa ccpa, Integer coppa) {
         return PrivacyContext.of(
-                Privacy.of(gdpr, EMPTY, ccpa, coppa),
+                Privacy.builder().gdpr(gdpr).consentString(EMPTY).ccpa(ccpa).coppa(coppa).build(),
                 TcfContext.empty());
     }
 
@@ -1753,16 +1930,21 @@ public class PrivacyEnforcementServiceTest extends VertxTest {
     }
 
     private static BidderInfo givenBidderInfo(int gdprVendorId, boolean enforceCcpa) {
-        return BidderInfo.of(
-                true,
-                true,
+        return BidderInfo.create(
                 true,
                 null,
+                true,
                 null,
                 null,
                 null,
-                new BidderInfo.GdprInfo(gdprVendorId),
+                null,
+                null,
+                null,
+                null,
+                gdprVendorId,
                 enforceCcpa,
-                false);
+                false,
+                CompressionType.NONE,
+                Ortb.of(false));
     }
 }

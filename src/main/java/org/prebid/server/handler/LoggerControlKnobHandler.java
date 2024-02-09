@@ -10,9 +10,6 @@ import org.prebid.server.log.LoggerControlKnob;
 import org.prebid.server.util.HttpUtil;
 
 import java.time.Duration;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 
@@ -21,8 +18,7 @@ public class LoggerControlKnobHandler implements Handler<RoutingContext> {
     private static final String LEVEL_PARAMETER = "level";
     private static final String DURATION_PARAMETER = "duration";
 
-    private static final Set<String> ALLOWED_LEVELS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "error", "warn", "info", "debug")));
+    private static final Set<String> ALLOWED_LEVELS = Set.of("error", "warn", "info", "debug");
 
     private final long maxDurationMs;
     private final LoggerControlKnob loggerControlKnob;
@@ -54,12 +50,12 @@ public class LoggerControlKnobHandler implements Handler<RoutingContext> {
         final String level = parameters.get(LEVEL_PARAMETER);
 
         if (level == null) {
-            throw new InvalidRequestException(String.format("Missing required parameter '%s'", LEVEL_PARAMETER));
+            throw new InvalidRequestException("Missing required parameter '%s'".formatted(LEVEL_PARAMETER));
         }
 
         if (!ALLOWED_LEVELS.contains(level.toLowerCase())) {
-            throw new InvalidRequestException(String.format(
-                    "Invalid '%s' parameter value, allowed values '%s'", LEVEL_PARAMETER, ALLOWED_LEVELS));
+            throw new InvalidRequestException("Invalid '%s' parameter value, allowed values '%s'"
+                    .formatted(LEVEL_PARAMETER, ALLOWED_LEVELS));
         }
 
         return level;
@@ -69,12 +65,12 @@ public class LoggerControlKnobHandler implements Handler<RoutingContext> {
         final Integer duration = getIntParameter(DURATION_PARAMETER, parameters);
 
         if (duration == null) {
-            throw new InvalidRequestException(String.format("Missing required parameter '%s'", DURATION_PARAMETER));
+            throw new InvalidRequestException("Missing required parameter '%s'".formatted(DURATION_PARAMETER));
         }
 
         if (duration < 1 || duration > maxDurationMs) {
-            throw new InvalidRequestException(String.format(
-                    "Parameter '%s' must be between %d and %d", DURATION_PARAMETER, 0, maxDurationMs));
+            throw new InvalidRequestException(
+                    "Parameter '%s' must be between %d and %d".formatted(DURATION_PARAMETER, 0, maxDurationMs));
         }
 
         return Duration.ofMillis(duration);
@@ -85,7 +81,7 @@ public class LoggerControlKnobHandler implements Handler<RoutingContext> {
         try {
             return value != null ? Integer.parseInt(value) : null;
         } catch (NumberFormatException e) {
-            throw new InvalidRequestException(String.format("Invalid '%s' parameter value", parameterName));
+            throw new InvalidRequestException("Invalid '%s' parameter value".formatted(parameterName));
         }
     }
 }

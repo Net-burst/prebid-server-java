@@ -12,8 +12,8 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.prebid.server.bidder.Bidder;
 import org.prebid.server.bidder.model.BidderBid;
+import org.prebid.server.bidder.model.BidderCall;
 import org.prebid.server.bidder.model.BidderError;
-import org.prebid.server.bidder.model.HttpCall;
 import org.prebid.server.bidder.model.HttpRequest;
 import org.prebid.server.bidder.model.Result;
 import org.prebid.server.exception.PreBidException;
@@ -24,26 +24,22 @@ import org.prebid.server.proto.openrtb.ext.request.madvertise.ExtImpMadvertise;
 import org.prebid.server.proto.openrtb.ext.response.BidType;
 import org.prebid.server.util.HttpUtil;
 
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public class MadvertiseBidder implements Bidder<BidRequest> {
 
     private static final TypeReference<ExtPrebid<?, ExtImpMadvertise>> MADVERTISE_EXT_TYPE_REFERENCE =
-            new TypeReference<ExtPrebid<?, ExtImpMadvertise>>() {
+            new TypeReference<>() {
             };
 
     private static final int ZONE_ID_MIN_LENGTH = 7;
     private static final String X_OPENRTB_VERSION = "2.5";
     private static final String ZONE_ID_MACRO = "{{ZoneID}}";
-    private static final Set<Integer> VIDEO_BID_ATTRS = Collections.unmodifiableSet(
-            new HashSet<>(Arrays.asList(16, 6, 7)));
+    private static final Set<Integer> VIDEO_BID_ATTRS = Set.of(16, 6, 7);
 
     private final JacksonMapper mapper;
     private final String endpointUrl;
@@ -83,11 +79,11 @@ public class MadvertiseBidder implements Bidder<BidRequest> {
         try {
             extImpMadvertise = mapper.mapper().convertValue(imp.getExt(), MADVERTISE_EXT_TYPE_REFERENCE).getBidder();
         } catch (IllegalArgumentException e) {
-            throw new PreBidException(String.format("Missing bidder ext in impression with id: %s", impId));
+            throw new PreBidException("Missing bidder ext in impression with id: " + impId);
         }
 
         if (StringUtils.length(extImpMadvertise.getZoneId()) < ZONE_ID_MIN_LENGTH) {
-            throw new PreBidException(String.format("The minLength of zone ID is 7; ImpID=%s", impId));
+            throw new PreBidException("The minLength of zone ID is 7; ImpID=" + impId);
         }
         return extImpMadvertise;
     }
@@ -117,7 +113,7 @@ public class MadvertiseBidder implements Bidder<BidRequest> {
     }
 
     @Override
-    public Result<List<BidderBid>> makeBids(HttpCall<BidRequest> httpCall, BidRequest bidRequest) {
+    public Result<List<BidderBid>> makeBids(BidderCall<BidRequest> httpCall, BidRequest bidRequest) {
         try {
             final BidResponse bidResponse = mapper.decodeValue(httpCall.getResponse().getBody(), BidResponse.class);
             return Result.of(extractBids(bidResponse), Collections.emptyList());
@@ -138,7 +134,7 @@ public class MadvertiseBidder implements Bidder<BidRequest> {
                 .flatMap(Collection::stream)
                 .filter(Objects::nonNull)
                 .map(bid -> BidderBid.of(bid, getBidMediaType(bid.getAttr()), bidResponse.getCur()))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private static BidType getBidMediaType(List<Integer> bidAttrs) {

@@ -31,7 +31,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 public class VideoResponseFactory {
 
@@ -79,7 +78,7 @@ public class VideoResponseFactory {
                     .map(SeatBid::getBid)
                     .filter(Objects::nonNull)
                     .flatMap(Collection::stream)
-                    .collect(Collectors.toList());
+                    .toList();
         } else {
             return Collections.emptyList();
         }
@@ -89,7 +88,7 @@ public class VideoResponseFactory {
         final List<ExtAdPod> adPods = new ArrayList<>();
         for (Bid bid : bids) {
             final Map<String, String> targeting = targeting(bid);
-            if (findByPrefix(targeting, "hb_uuid") == null) {
+            if (findByPrefix(targeting, "_uuid") == null) {
                 continue;
             }
             final String impId = bid.getImpid();
@@ -100,9 +99,9 @@ public class VideoResponseFactory {
             final Integer podId = Integer.parseInt(podIdString);
 
             final ExtResponseVideoTargeting videoTargeting = ExtResponseVideoTargeting.of(
-                    findByPrefix(targeting, "hb_pb"),
-                    findByPrefix(targeting, "hb_pb_cat_dur"),
-                    findByPrefix(targeting, "hb_uuid"));
+                    findByPrefix(targeting, "_pb"),
+                    findByPrefix(targeting, "_pb_cat_dur"),
+                    findByPrefix(targeting, "_uuid"));
 
             ExtAdPod adPod = adPods.stream()
                     .filter(extAdPod -> extAdPod.getPodid().equals(podId))
@@ -137,7 +136,7 @@ public class VideoResponseFactory {
 
     private static String findByPrefix(Map<String, String> keyToValue, String prefix) {
         return keyToValue.entrySet().stream()
-                .filter(keyAndValue -> keyAndValue.getKey().startsWith(prefix))
+                .filter(keyAndValue -> keyAndValue.getKey().contains(prefix))
                 .map(Map.Entry::getValue)
                 .findFirst()
                 .orElse(null);
@@ -146,7 +145,7 @@ public class VideoResponseFactory {
     private static List<ExtAdPod> adPodsWithErrors(List<PodError> podErrors) {
         return podErrors.stream()
                 .map(podError -> ExtAdPod.of(podError.getPodId(), null, podError.getPodErrors()))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private static ExtAmpVideoResponse extResponseFrom(BidResponse bidResponse) {
@@ -156,12 +155,13 @@ public class VideoResponseFactory {
         final ExtResponseDebug extDebug = ext != null ? ext.getDebug() : null;
 
         final Map<String, List<ExtBidderError>> extErrors = ext != null ? ext.getErrors() : null;
+        final Map<String, List<ExtBidderError>> extWarnings = ext != null ? ext.getWarnings() : null;
 
         final ExtModules extModules = extPrebid != null ? extPrebid.getModules() : null;
         final ExtAmpVideoPrebid extAmpVideoPrebid = extModules != null ? ExtAmpVideoPrebid.of(extModules) : null;
 
-        return ObjectUtils.anyNotNull(extDebug, extErrors, extAmpVideoPrebid)
-                ? ExtAmpVideoResponse.of(extDebug, extErrors, extAmpVideoPrebid)
+        return ObjectUtils.anyNotNull(extDebug, extErrors, extWarnings, extAmpVideoPrebid)
+                ? ExtAmpVideoResponse.of(extDebug, extErrors, extWarnings, extAmpVideoPrebid)
                 : null;
     }
 

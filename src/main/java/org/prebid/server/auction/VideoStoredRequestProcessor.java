@@ -66,66 +66,35 @@ public class VideoStoredRequestProcessor {
     private final ApplicationSettings applicationSettings;
     private final VideoRequestValidator validator;
     private final Metrics metrics;
-    private final TimeoutResolver timeoutResolver;
     private final TimeoutFactory timeoutFactory;
     private final JacksonMapper mapper;
     private final JsonMerger jsonMerger;
 
-    private VideoStoredRequestProcessor(boolean enforceStoredRequest,
-                                        List<String> blacklistedAccounts,
-                                        long defaultTimeout,
-                                        String currency,
-                                        BidRequest defaultBidRequest,
-                                        ApplicationSettings applicationSettings,
-                                        VideoRequestValidator validator,
-                                        Metrics metrics,
-                                        TimeoutFactory timeoutFactory,
-                                        TimeoutResolver timeoutResolver,
-                                        JacksonMapper mapper,
-                                        JsonMerger jsonMerger) {
+    public VideoStoredRequestProcessor(boolean enforceStoredRequest,
+                                       List<String> blacklistedAccounts,
+                                       long defaultTimeout,
+                                       String adServerCurrency,
+                                       String defaultBidRequestPath,
+                                       FileSystem fileSystem,
+                                       ApplicationSettings applicationSettings,
+                                       VideoRequestValidator validator,
+                                       Metrics metrics,
+                                       TimeoutFactory timeoutFactory,
+                                       JacksonMapper mapper,
+                                       JsonMerger jsonMerger) {
 
         this.enforceStoredRequest = enforceStoredRequest;
-        this.blacklistedAccounts = blacklistedAccounts;
+        this.blacklistedAccounts = Objects.requireNonNull(blacklistedAccounts);
         this.defaultTimeout = defaultTimeout;
-        this.currency = currency;
-        this.defaultBidRequest = defaultBidRequest;
-        this.applicationSettings = applicationSettings;
-        this.validator = validator;
-        this.metrics = metrics;
-        this.timeoutFactory = timeoutFactory;
-        this.timeoutResolver = timeoutResolver;
-        this.mapper = mapper;
-        this.jsonMerger = jsonMerger;
-    }
-
-    public static VideoStoredRequestProcessor create(boolean enforceStoredRequest,
-                                                     List<String> blacklistedAccounts,
-                                                     long defaultTimeout,
-                                                     String adServerCurrency,
-                                                     String defaultBidRequestPath,
-                                                     FileSystem fileSystem,
-                                                     ApplicationSettings applicationSettings,
-                                                     VideoRequestValidator validator,
-                                                     Metrics metrics,
-                                                     TimeoutFactory timeoutFactory,
-                                                     TimeoutResolver timeoutResolver,
-                                                     JacksonMapper mapper,
-                                                     JsonMerger jsonMerger) {
-
-        return new VideoStoredRequestProcessor(
-                enforceStoredRequest,
-                Objects.requireNonNull(blacklistedAccounts),
-                defaultTimeout,
-                StringUtils.isBlank(adServerCurrency) ? DEFAULT_CURRENCY : adServerCurrency,
-                readBidRequest(
-                        defaultBidRequestPath, Objects.requireNonNull(fileSystem), Objects.requireNonNull(mapper)),
-                Objects.requireNonNull(applicationSettings),
-                Objects.requireNonNull(validator),
-                Objects.requireNonNull(metrics),
-                Objects.requireNonNull(timeoutFactory),
-                Objects.requireNonNull(timeoutResolver),
-                Objects.requireNonNull(mapper),
-                Objects.requireNonNull(jsonMerger));
+        this.currency = StringUtils.isBlank(adServerCurrency) ? DEFAULT_CURRENCY : adServerCurrency;
+        this.defaultBidRequest = readBidRequest(
+                defaultBidRequestPath, Objects.requireNonNull(fileSystem), Objects.requireNonNull(mapper));
+        this.applicationSettings = Objects.requireNonNull(applicationSettings);
+        this.validator = Objects.requireNonNull(validator);
+        this.metrics = Objects.requireNonNull(metrics);
+        this.timeoutFactory = Objects.requireNonNull(timeoutFactory);
+        this.mapper = Objects.requireNonNull(mapper);
+        this.jsonMerger = Objects.requireNonNull(jsonMerger);
     }
 
     /**
@@ -148,7 +117,7 @@ public class VideoStoredRequestProcessor {
                 .map(storedData -> toBidRequestWithPodErrors(storedData, videoRequest, storedBidRequestId))
 
                 .recover(exception -> Future.failedFuture(new InvalidRequestException(
-                        String.format("Stored request fetching failed: %s", exception.getMessage()))));
+                        "Stored request fetching failed: " + exception.getMessage())));
     }
 
     private static BidRequest readBidRequest(String defaultBidRequestPath,
@@ -166,6 +135,7 @@ public class VideoStoredRequestProcessor {
 
         requestIds.forEach(
                 id -> metrics.updateStoredRequestMetric(storedDataResult.getStoredIdToRequest().containsKey(id)));
+
         impIds.forEach(
                 id -> metrics.updateStoredImpsMetric(storedDataResult.getStoredIdToImp().containsKey(id)));
 
@@ -259,10 +229,10 @@ public class VideoStoredRequestProcessor {
                 // with this handler we will have one impression per specified duration
                 numImps = Math.max(numImps, durationRangeSec.size());
             }
-            int impDivNumber = numImps / durationRangeSec.size();
+            final int impDivNumber = numImps / durationRangeSec.size();
 
             for (int i = 0; i < numImps; i++) {
-                Integer maxDuration;
+                final Integer maxDuration;
                 Integer minDuration = null;
                 if (BooleanUtils.isTrue(requireExactDuration)) {
                     int durationIndex = i / impDivNumber;
@@ -283,7 +253,7 @@ public class VideoStoredRequestProcessor {
                     continue;
                 }
                 final Imp imp = storedImp.toBuilder()
-                        .id(String.format("%d_%d", pod.getPodId(), i))
+                        .id("%d_%d".formatted(pod.getPodId(), i))
                         .video(updateVideo(video, minDuration, maxDuration))
                         .build();
                 imps.add(imp);
@@ -351,8 +321,7 @@ public class VideoStoredRequestProcessor {
             bidRequestBuilder.regs(regs);
         }
 
-        final long timeout = timeoutResolver.resolve(videoRequest.getTmax());
-        bidRequestBuilder.tmax(timeout);
+        bidRequestBuilder.tmax(videoRequest.getTmax());
 
         addRequiredOpenRtbFields(bidRequestBuilder);
 

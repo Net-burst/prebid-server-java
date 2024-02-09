@@ -79,8 +79,6 @@ public class VideoStoredRequestProcessorTest extends VertxTest {
     @Mock
     private Metrics metrics;
     @Mock
-    private TimeoutResolver timeoutResolver;
-    @Mock
     private TimeoutFactory timeoutFactory;
 
     private VideoStoredRequestProcessor target;
@@ -90,7 +88,7 @@ public class VideoStoredRequestProcessorTest extends VertxTest {
         given(fileSystem.readFileBlocking(anyString()))
                 .willReturn(Buffer.buffer(mapper.writeValueAsString(BidRequest.builder().at(1).build())));
 
-        target = VideoStoredRequestProcessor.create(
+        target = new VideoStoredRequestProcessor(
                 false,
                 emptyList(),
                 2000L,
@@ -101,7 +99,6 @@ public class VideoStoredRequestProcessorTest extends VertxTest {
                 validator,
                 metrics,
                 timeoutFactory,
-                timeoutResolver,
                 jacksonMapper,
                 new JsonMerger(jacksonMapper));
     }
@@ -207,7 +204,7 @@ public class VideoStoredRequestProcessorTest extends VertxTest {
                 .bcat(singletonList("bcat"))
                 .badv(singletonList("badv"))
                 .cur(singletonList("USD"))
-                .tmax(0L)
+                .tmax(null)
                 .ext(ExtRequest.of(ext))
                 .build();
 
@@ -398,7 +395,7 @@ public class VideoStoredRequestProcessorTest extends VertxTest {
                 .isEqualTo(mapper.valueToTree(priceGranularity));
     }
 
-    private BidRequestVideo givenValidDataResult(
+    private static BidRequestVideo givenValidDataResult(
             UnaryOperator<BidRequestVideo.BidRequestVideoBuilder> requestCustomizer,
             UnaryOperator<Podconfig.PodconfigBuilder> podconfigCustomizer) {
 

@@ -28,7 +28,7 @@ public class SettingsCache implements CacheNotificationListener {
         impCache = createCache(ttl, size);
     }
 
-    static <T> Map<String, T> createCache(int ttl, int size) {
+    public static <T> Map<String, T> createCache(int ttl, int size) {
         return Caffeine.newBuilder()
                 .expireAfterWrite(ttl, TimeUnit.SECONDS)
                 .maximumSize(size)
@@ -76,7 +76,7 @@ public class SettingsCache implements CacheNotificationListener {
 
     @Override
     public void invalidate(List<String> requests, List<String> imps) {
-        requestCache.keySet().removeAll(requests);
-        impCache.keySet().removeAll(imps);
+        requests.forEach(requestCache.keySet()::remove);
+        imps.forEach(impCache.keySet()::remove);
     }
 }

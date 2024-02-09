@@ -2,10 +2,10 @@ package org.prebid.server.deals.targeting.interpret;
 
 import lombok.EqualsAndHashCode;
 import org.prebid.server.deals.targeting.RequestContext;
+import org.prebid.server.deals.targeting.model.LookupResult;
 import org.prebid.server.deals.targeting.syntax.TargetingCategory;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 @EqualsAndHashCode(callSuper = true)
 public class IntersectsStrings extends Intersects<String> {
@@ -15,11 +15,14 @@ public class IntersectsStrings extends Intersects<String> {
     }
 
     @Override
-    public List<String> lookupActualValues(RequestContext context) {
-        return toLowerCase(context.lookupStrings(category));
+    public LookupResult<List<String>> lookupActualValues(RequestContext context) {
+        return LookupResult.of(
+                context.lookupStrings(category).getValues().stream()
+                        .map(IntersectsStrings::toLowerCase)
+                        .toList());
     }
 
     private static List<String> toLowerCase(List<String> values) {
-        return values.stream().map(String::toLowerCase).collect(Collectors.toList());
+        return values.stream().map(String::toLowerCase).toList();
     }
 }

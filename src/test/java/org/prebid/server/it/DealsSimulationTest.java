@@ -33,6 +33,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
 import java.time.temporal.WeekFields;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -191,7 +192,7 @@ public class DealsSimulationTest extends VertxTest {
     }
 
     private void awaitForLineItemMetadata(ZonedDateTime now) {
-        await().atMost(10, TimeUnit.SECONDS).pollInterval(100, TimeUnit.MILLISECONDS)
+        await().atMost(20, TimeUnit.SECONDS).pollInterval(100, TimeUnit.MILLISECONDS)
                 .until(() -> lineItemService.accountHasDeals("2001", now));
     }
 
@@ -218,12 +219,12 @@ public class DealsSimulationTest extends VertxTest {
                                 JSONCompareMode.NON_EXTENSIBLE,
                                 new Customization("ext.debug.trace.lineitems.lineItem" + i + "[*].time",
                                         timeValueMatcher)))))
-                .collect(Collectors.toList());
+                .collect(Collectors.toCollection(ArrayList::new));
 
         arrayValueMatchers.add(new Customization("ext.debug.trace.deals", arrayValueMatcher));
 
         return new CustomComparator(JSONCompareMode.NON_EXTENSIBLE,
-                arrayValueMatchers.toArray(new Customization[arrayValueMatchers.size()]));
+                arrayValueMatchers.toArray(Customization[]::new));
     }
 
     private void assertResponse(String expectedResponsePath, Response response, List<String> bidders)

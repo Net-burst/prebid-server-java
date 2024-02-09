@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.iab.openrtb.request.Imp;
+import com.iab.openrtb.response.Bid;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.core.logging.Logger;
@@ -48,6 +49,7 @@ import org.prebid.server.vertx.http.model.HttpClientResponse;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -114,7 +116,7 @@ public class CacheService {
     public String getEndpointHost() {
         final String host = endpointUrl.getHost();
         final int port = endpointUrl.getPort();
-        return port != -1 ? String.format("%s:%d", host, port) : host;
+        return port != -1 ? "%s:%d".formatted(host, port) : host;
     }
 
     public String getEndpointPath() {
@@ -148,7 +150,7 @@ public class CacheService {
                 .type(CachedDebugLog.CACHE_TYPE)
                 .value(new TextNode(videoCacheDebugLog.buildCacheBody()))
                 .expiry(videoCacheTtl != null ? videoCacheTtl : videoCacheDebugLog.getTtl())
-                .key(String.format("log_%s", hbCacheId))
+                .key("log_" + hbCacheId)
                 .build(), creativeSizeFromTextNode(value));
     }
 
@@ -233,7 +235,7 @@ public class CacheService {
                                 integration))
                         .build())
                 .map(payload -> CachedCreative.of(payload, creativeSizeFromTextNode(payload.getValue())))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     public Future<CacheServiceResult> cacheBidsOpenrtb(List<BidInfo> bidsToCache,
@@ -286,7 +288,7 @@ public class CacheService {
 
         return bidInfos.stream()
                 .map(bidInfo -> toCacheBid(bidInfo, cacheBidsTtl, accountCacheTtl, false))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private List<CacheBid> getVideoCacheBids(List<BidInfo> bidInfos,
@@ -296,7 +298,7 @@ public class CacheService {
         return bidInfos.stream()
                 .filter(bidInfo -> Objects.equals(bidInfo.getBidType(), BidType.video))
                 .map(bidInfo -> toCacheBid(bidInfo, cacheBidsTtl, accountCacheTtl, true))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     /**
@@ -307,7 +309,7 @@ public class CacheService {
                                 CacheTtl accountCacheTtl,
                                 boolean isVideoBid) {
 
-        final com.iab.openrtb.response.Bid bid = bidInfo.getBid();
+        final Bid bid = bidInfo.getBid();
         final Integer bidTtl = bid.getExp();
         final Imp correspondingImp = bidInfo.getCorrespondingImp();
         final Integer impTtl = correspondingImp != null ? correspondingImp.getExp() : null;
@@ -345,7 +347,7 @@ public class CacheService {
                         bids.stream().map(cacheBid ->
                                 createJsonPutObjectOpenrtb(cacheBid, accountId, eventsContext)),
                         videoBids.stream().map(videoBid -> createXmlPutObjectOpenrtb(videoBid, requestId, hbCacheId)))
-                .collect(Collectors.toList());
+                .collect(Collectors.toCollection(ArrayList::new));
 
         if (cachedCreatives.isEmpty()) {
             return Future.succeededFuture(CacheServiceResult.empty());
@@ -466,7 +468,7 @@ public class CacheService {
                                                       EventsContext eventsContext) {
 
         final BidInfo bidInfo = cacheBid.getBidInfo();
-        final com.iab.openrtb.response.Bid bid = bidInfo.getBid();
+        final Bid bid = bidInfo.getBid();
         final ObjectNode bidObjectNode = mapper.mapper().valueToTree(bid);
 
         final String eventUrl =
@@ -494,7 +496,7 @@ public class CacheService {
      */
     private CachedCreative createXmlPutObjectOpenrtb(CacheBid cacheBid, String requestId, String hbCacheId) {
         final BidInfo bidInfo = cacheBid.getBidInfo();
-        final com.iab.openrtb.response.Bid bid = bidInfo.getBid();
+        final Bid bid = bidInfo.getBid();
         final String vastXml = bid.getAdm();
 
         final String customCacheKey = resolveCustomCacheKey(hbCacheId, bidInfo.getCategory());
@@ -512,7 +514,7 @@ public class CacheService {
 
     private static String resolveCustomCacheKey(String hbCacheId, String category) {
         return StringUtils.isNoneEmpty(category, hbCacheId)
-                ? String.format("%s_%s", category, hbCacheId)
+                ? "%s_%s".formatted(category, hbCacheId)
                 : null;
     }
 
@@ -550,14 +552,14 @@ public class CacheService {
                                                 long startTime) {
 
         if (statusCode != 200) {
-            throw new PreBidException(String.format("HTTP status code %d", statusCode));
+            throw new PreBidException("HTTP status code " + statusCode);
         }
 
         final BidCacheResponse bidCacheResponse;
         try {
             bidCacheResponse = mapper.decodeValue(responseBody, BidCacheResponse.class);
         } catch (DecodeException e) {
-            throw new PreBidException(String.format("Cannot parse response: %s", responseBody), e);
+            throw new PreBidException("Cannot parse response: " + responseBody, e);
         }
 
         final List<CacheObject> responses = bidCacheResponse.getResponses();
@@ -577,32 +579,32 @@ public class CacheService {
                 .filter(Objects::nonNull)
                 .map(responseItemCreator)
                 .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     /**
      * Creates a map with bids as a key and {@link CacheInfo} as a value from obtained UUIDs.
      */
-    private static Map<com.iab.openrtb.response.Bid, CacheInfo> toResultMap(List<CacheBid> cacheBids,
-                                                                            List<CacheBid> cacheVideoBids,
-                                                                            List<String> uuids,
-                                                                            String hbCacheId) {
+    private static Map<Bid, CacheInfo> toResultMap(List<CacheBid> cacheBids,
+                                                   List<CacheBid> cacheVideoBids,
+                                                   List<String> uuids,
+                                                   String hbCacheId) {
 
-        final Map<com.iab.openrtb.response.Bid, CacheInfo> result = new HashMap<>(uuids.size());
+        final Map<Bid, CacheInfo> result = new HashMap<>(uuids.size());
 
         // here we assume "videoBids" is a sublist of "bids"
         // so, no need for a separate loop on "videoBids" if "bids" is not empty
         if (!cacheBids.isEmpty()) {
-            final List<com.iab.openrtb.response.Bid> videoBids = cacheVideoBids.stream()
+            final List<Bid> videoBids = cacheVideoBids.stream()
                     .map(CacheBid::getBidInfo)
                     .map(BidInfo::getBid)
-                    .collect(Collectors.toList());
+                    .toList();
 
             final int bidsSize = cacheBids.size();
             for (int i = 0; i < bidsSize; i++) {
                 final CacheBid cacheBid = cacheBids.get(i);
                 final BidInfo bidInfo = cacheBid.getBidInfo();
-                final com.iab.openrtb.response.Bid bid = bidInfo.getBid();
+                final Bid bid = bidInfo.getBid();
                 final Integer ttl = cacheBid.getTtl();
 
                 // determine uuid for video bid
@@ -701,7 +703,7 @@ public class CacheService {
     private BidCacheRequest toBidCacheRequest(List<CachedCreative> cachedCreatives) {
         return BidCacheRequest.of(cachedCreatives.stream()
                 .map(CachedCreative::getPayload)
-                .collect(Collectors.toList()));
+                .toList());
     }
 
     @Value(staticConstructor = "of")

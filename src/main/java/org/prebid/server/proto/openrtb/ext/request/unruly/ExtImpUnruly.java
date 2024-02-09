@@ -1,18 +1,13 @@
 package org.prebid.server.proto.openrtb.ext.request.unruly;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import lombok.AllArgsConstructor;
 import lombok.Value;
 
-/**
- * Defines the contract for bidrequest.imp[i].ext.unruly
- */
-@Value
-@AllArgsConstructor(staticName = "of")
+@Value(staticConstructor = "of")
 public class ExtImpUnruly {
 
-    String uuid;
-
     @JsonProperty("siteid")
-    String siteId;
+    @JsonAlias({"siteId"})
+    Integer siteId;
 }

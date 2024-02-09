@@ -49,15 +49,15 @@ public class MaxMindGeoLocationService implements GeoLocationService, RemoteFile
                 }
             }
             if (!hasDatabaseFile) {
-                return Future.failedFuture(String.format("Database file %s not found in %s archive", DATABASE_FILE_NAME,
-                        dataFilePath));
+                return Future.failedFuture("Database file %s not found in %s archive"
+                        .formatted(DATABASE_FILE_NAME, dataFilePath));
             }
 
             databaseReader = new DatabaseReader.Builder(tarInput).fileMode(Reader.FileMode.MEMORY).build();
             return Future.succeededFuture();
         } catch (IOException e) {
             return Future.failedFuture(
-                    String.format("IO Exception occurred while trying to read an archive/db file: %s", e.getMessage()));
+                    "IO Exception occurred while trying to read an archive/db file: " + e.getMessage());
         }
     }
 
@@ -99,7 +99,7 @@ public class MaxMindGeoLocationService implements GeoLocationService, RemoteFile
         return StringUtils.lowerCase(isoCode);
     }
 
-    private static String resolveRegion(CityResponse cityResponse) throws IOException, GeoIp2Exception {
+    private static String resolveRegion(CityResponse cityResponse) {
         final List<Subdivision> subdivisions = cityResponse != null ? cityResponse.getSubdivisions() : null;
         final Subdivision firstSubdivision = CollectionUtils.isEmpty(subdivisions) ? null : subdivisions.get(0);
         return firstSubdivision != null ? firstSubdivision.getIsoCode() : null;

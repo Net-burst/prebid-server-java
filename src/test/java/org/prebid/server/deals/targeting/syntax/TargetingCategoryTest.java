@@ -19,6 +19,7 @@ public class TargetingCategoryTest {
                 "adunit.mediatype",
                 "adunit.adslot",
                 "site.domain",
+                "site.publisher.domain",
                 "site.referrer",
                 "app.bundle",
                 "device.geo.ext.vendor.attribute",
@@ -52,6 +53,7 @@ public class TargetingCategoryTest {
                 "adunit.mediatype",
                 "adunit.adslot",
                 "site.domain",
+                "site.publisher.domain",
                 "site.referrer",
                 "app.bundle",
                 "pos",
@@ -74,7 +76,7 @@ public class TargetingCategoryTest {
         final TargetingCategory bidderParamCategory = TargetingCategory.fromString("bidp.rubicon.siteId");
         // then
         assertThat(bidderParamCategory.type()).isEqualTo(TargetingCategory.Type.bidderParam);
-        assertThat(bidderParamCategory.path()).isEqualTo("rubicon.siteId");
+        assertThat(bidderParamCategory.path()).isEqualTo("siteId");
 
         // when
         final TargetingCategory userSegmentCategory = TargetingCategory.fromString("segment.bluekai");

@@ -2,16 +2,19 @@ package org.prebid.server.functional.service
 
 import com.fasterxml.jackson.core.type.TypeReference
 import io.qameta.allure.Step
+import io.restassured.authentication.AuthenticationScheme
 import io.restassured.authentication.BasicAuthScheme
 import io.restassured.builder.RequestSpecBuilder
 import io.restassured.response.Response
 import io.restassured.specification.RequestSpecification
 import org.prebid.server.functional.model.UidsCookie
 import org.prebid.server.functional.model.bidder.BidderName
+import org.prebid.server.functional.model.deals.report.LineItemStatusReport
 import org.prebid.server.functional.model.mock.services.prebidcache.response.PrebidCacheResponse
 import org.prebid.server.functional.model.request.amp.AmpRequest
 import org.prebid.server.functional.model.request.auction.BidRequest
 import org.prebid.server.functional.model.request.cookiesync.CookieSyncRequest
+import org.prebid.server.functional.model.request.dealsupdate.ForceDealsUpdateRequest
 import org.prebid.server.functional.model.request.event.EventRequest
 import org.prebid.server.functional.model.request.logging.httpinteraction.HttpInteractionRequest
 import org.prebid.server.functional.model.request.setuid.SetuidRequest
@@ -40,7 +43,7 @@ import java.time.format.DateTimeFormatter
 import static io.restassured.RestAssured.given
 import static java.time.ZoneOffset.UTC
 
-class PrebidServerService {
+class PrebidServerService implements ObjectMapperWrapper {
 
     static final String AUCTION_ENDPOINT = "/openrtb2/auction"
     static final String AMP_ENDPOINT = "/openrtb2/amp"
@@ -55,29 +58,31 @@ class PrebidServerService {
     static final String CURRENCY_RATES_ENDPOINT = "/currency/rates"
     static final String HTTP_INTERACTION_ENDPOINT = "/logging/httpinteraction"
     static final String COLLECTED_METRICS_ENDPOINT = "/collected-metrics"
+    static final String FORCE_DEALS_UPDATE_ENDPOINT = "/pbs-admin/force-deals-update"
+    static final String LINE_ITEM_STATUS_ENDPOINT = "/pbs-admin/lineitem-status"
+    static final String PROMETHEUS_METRICS_ENDPOINT = "/metrics"
+    static final String UIDS_COOKIE_NAME = "uids"
 
     private final PrebidServerContainer pbsContainer
-    private final ObjectMapperWrapper mapper
     private final RequestSpecification requestSpecification
     private final RequestSpecification adminRequestSpecification
+    private final RequestSpecification prometheusRequestSpecification
 
-    private final Logger log = LoggerFactory.getLogger(PrebidServerService.class)
+    private final Logger log = LoggerFactory.getLogger(PrebidServerService)
 
-    PrebidServerService(PrebidServerContainer pbsContainer, ObjectMapperWrapper mapper) {
+    PrebidServerService(PrebidServerContainer pbsContainer) {
         def authenticationScheme = new BasicAuthScheme()
         authenticationScheme.userName = pbsContainer.ADMIN_ENDPOINT_USERNAME
         authenticationScheme.password = pbsContainer.ADMIN_ENDPOINT_PASSWORD
         this.pbsContainer = pbsContainer
-        this.mapper = mapper
         requestSpecification = new RequestSpecBuilder().setBaseUri(pbsContainer.rootUri)
                                                        .build()
-        adminRequestSpecification = new RequestSpecBuilder().setBaseUri(pbsContainer.adminRootUri)
-                                                            .setAuth(authenticationScheme)
-                                                            .build()
+        adminRequestSpecification = buildAndGetRequestSpecification(pbsContainer.adminRootUri, authenticationScheme)
+        prometheusRequestSpecification = buildAndGetRequestSpecification(pbsContainer.prometheusRootUri, authenticationScheme)
     }
 
     @Step("[POST] /openrtb2/auction")
-    BidResponse sendAuctionRequest(BidRequest bidRequest, Map<String, String> headers = [:]) {
+    BidResponse sendAuctionRequest(BidRequest bidRequest, Map<String, ?> headers = [:]) {
         def response = postAuction(bidRequest, headers)
 
         checkResponseStatusCode(response)
@@ -114,34 +119,45 @@ class PrebidServerService {
 
     @Step("[POST] /cookie_sync without cookie")
     CookieSyncResponse sendCookieSyncRequest(CookieSyncRequest request) {
-        def payload = mapper.encode(request)
-        def response = given(requestSpecification).body(payload)
-                                                  .post(COOKIE_SYNC_ENDPOINT)
+        def response = postCookieSync(request)
 
         checkResponseStatusCode(response)
         response.as(CookieSyncResponse)
     }
 
-    @Step("[POST] /cookie_sync with cookie")
-    CookieSyncResponse sendCookieSyncRequest(CookieSyncRequest request, UidsCookie uidsCookie) {
-        def uidsCookieAsJson = mapper.encode(uidsCookie)
-        def uidsCookieAsEncodedJson = Base64.urlEncoder.encodeToString(uidsCookieAsJson.bytes)
+    @Step("[POST] /cookie_sync with headers")
+    CookieSyncResponse sendCookieSyncRequest(CookieSyncRequest request, Map<String, String> headers) {
+        def response = postCookieSync(request, null, headers)
 
-        def payload = mapper.encode(request)
-        def response = given(requestSpecification).cookie("uids", uidsCookieAsEncodedJson)
-                                                  .body(payload)
-                                                  .post(COOKIE_SYNC_ENDPOINT)
+        checkResponseStatusCode(response)
+        response.as(CookieSyncResponse)
+    }
+
+    @Step("[POST] /cookie_sync with uids cookie")
+    CookieSyncResponse sendCookieSyncRequest(CookieSyncRequest request, UidsCookie uidsCookie) {
+        def response = postCookieSync(request, uidsCookie)
+
+        checkResponseStatusCode(response)
+        response.as(CookieSyncResponse)
+    }
+
+    @Step("[POST] /cookie_sync with uids and additional cookies")
+    CookieSyncResponse sendCookieSyncRequest(CookieSyncRequest request,
+                                             UidsCookie uidsCookie,
+                                             Map<String, String> additionalCookies) {
+        def response = postCookieSync(request, uidsCookie, additionalCookies)
 
         checkResponseStatusCode(response)
         response.as(CookieSyncResponse)
     }
 
     @Step("[GET] /setuid")
-    SetuidResponse sendSetUidRequest(SetuidRequest request, UidsCookie uidsCookie) {
-        def uidsCookieAsJson = mapper.encode(uidsCookie)
+    SetuidResponse sendSetUidRequest(SetuidRequest request, UidsCookie uidsCookie, Map header = [:]) {
+        def uidsCookieAsJson = encode(uidsCookie)
         def uidsCookieAsEncodedJson = Base64.urlEncoder.encodeToString(uidsCookieAsJson.bytes)
-        def response = given(requestSpecification).cookie("uids", uidsCookieAsEncodedJson)
-                                                  .queryParams(mapper.toMap(request))
+        def response = given(requestSpecification).cookie(UIDS_COOKIE_NAME, uidsCookieAsEncodedJson)
+                                                  .queryParams(toMap(request))
+                                                  .headers(header)
                                                   .get(SET_UID_ENDPOINT)
 
         checkResponseStatusCode(response)
@@ -149,15 +165,16 @@ class PrebidServerService {
         def setuidResponse = new SetuidResponse()
         setuidResponse.uidsCookie = getDecodedUidsCookie(response)
         setuidResponse.responseBody = response.asByteArray()
+        setuidResponse.headers = getHeaders(response)
         setuidResponse
     }
 
     @Step("[GET] /getuids")
     GetuidResponse sendGetUidRequest(UidsCookie uidsCookie) {
-        def uidsCookieAsJson = mapper.encode(uidsCookie)
+        def uidsCookieAsJson = encode(uidsCookie)
         def uidsCookieAsEncodedJson = Base64.urlEncoder.encodeToString(uidsCookieAsJson.bytes)
 
-        def response = given(requestSpecification).cookie("uids", uidsCookieAsEncodedJson)
+        def response = given(requestSpecification).cookie(UIDS_COOKIE_NAME, uidsCookieAsEncodedJson)
                                                   .get(GET_UIDS_ENDPOINT)
 
         checkResponseStatusCode(response)
@@ -165,8 +182,9 @@ class PrebidServerService {
     }
 
     @Step("[GET] /event")
-    byte[] sendEventRequest(EventRequest eventRequest) {
-        def response = given(requestSpecification).queryParams(mapper.toMap(eventRequest))
+    byte[] sendEventRequest(EventRequest eventRequest, Map<String, String> headers = [:]) {
+        def response = given(requestSpecification).headers(headers)
+                                                  .queryParams(toMap(eventRequest))
                                                   .get(EVENT_ENDPOINT)
 
         checkResponseStatusCode(response)
@@ -192,20 +210,19 @@ class PrebidServerService {
     }
 
     @Step("[GET] /info/bidders")
-    List<String> sendInfoBiddersRequest(String enabledOnly) {
-        def response = given(requestSpecification).queryParam("enabledonly", enabledOnly)
-                                                  .get(INFO_BIDDERS_ENDPOINT)
-
-        checkResponseStatusCode(response)
-        mapper.decode(response.asString(), new TypeReference<List<String>>() {})
-    }
-
-    @Step("[GET] /info/bidders")
     String sendInfoBiddersRequest() {
         def response = given(requestSpecification).get(INFO_BIDDERS_ENDPOINT)
 
         checkResponseStatusCode(response)
         response.body().asString()
+    }
+
+    @Step("[GET] /info/bidders with params={queryParam}")
+    List<String> sendInfoBiddersRequest(Map<String, String> queryParam) {
+        def response = given(requestSpecification).queryParams(queryParam).get(INFO_BIDDERS_ENDPOINT)
+
+        checkResponseStatusCode(response)
+        decode(response.asString(), new TypeReference<List<String>>() {})
     }
 
     @Step("[GET] /info/bidders/{bidderName}")
@@ -235,7 +252,7 @@ class PrebidServerService {
 
     @Step("[GET] /logging/httpinteraction")
     String sendLoggingHttpInteractionRequest(HttpInteractionRequest httpInteractionRequest) {
-        def response = given(adminRequestSpecification).queryParams(mapper.toMap(httpInteractionRequest))
+        def response = given(adminRequestSpecification).queryParams(toMap(httpInteractionRequest))
                                                        .get(HTTP_INTERACTION_ENDPOINT)
 
         checkResponseStatusCode(response)
@@ -247,29 +264,94 @@ class PrebidServerService {
         def response = given(adminRequestSpecification).get(COLLECTED_METRICS_ENDPOINT)
 
         checkResponseStatusCode(response)
-        mapper.decode(response.asString(), new TypeReference<Map<String, Number>>() {})
+        decode(response.asString(), new TypeReference<Map<String, Number>>() {})
     }
 
-    private Response postAuction(BidRequest bidRequest, Map<String, String> headers = [:]) {
-        def payload = mapper.encode(bidRequest)
+    @Step("[GET] /pbs-admin/force-deals-update")
+    void sendForceDealsUpdateRequest(ForceDealsUpdateRequest forceDealsUpdateRequest) {
+        def response = given(adminRequestSpecification).queryParams(toMap(forceDealsUpdateRequest))
+                                                       .get(FORCE_DEALS_UPDATE_ENDPOINT)
+
+        checkResponseStatusCode(response, 204)
+    }
+
+    @Step("[GET] /pbs-admin/lineitem-status")
+    LineItemStatusReport sendLineItemStatusRequest(String lineItemId) {
+        def request = given(adminRequestSpecification)
+        if (lineItemId != null) {
+            request.queryParam("id", lineItemId)
+        }
+
+        def response = request.get(LINE_ITEM_STATUS_ENDPOINT)
+
+        checkResponseStatusCode(response)
+        response.as(LineItemStatusReport)
+    }
+
+    @Step("[GET] /metrics")
+    String sendPrometheusMetricsRequest() {
+        def response = given(prometheusRequestSpecification).get(PROMETHEUS_METRICS_ENDPOINT)
+
+        checkResponseStatusCode(response)
+        response.body().asString()
+    }
+
+    PrebidServerService withWarmup() {
+        sendAuctionRequest(BidRequest.defaultBidRequest)
+        this
+    }
+
+    private Response postAuction(BidRequest bidRequest, Map<String, ?> headers = [:]) {
+        def payload = encode(bidRequest)
 
         given(requestSpecification).headers(headers)
                                    .body(payload)
                                    .post(AUCTION_ENDPOINT)
     }
 
+    private Response postCookieSync(CookieSyncRequest cookieSyncRequest,
+                                    UidsCookie uidsCookie = null,
+                                    Map<String, ?> additionalCookies = null,
+                                    Map<String, String> header = null) {
+
+        def cookies = additionalCookies ?: [:]
+
+        if (uidsCookie) {
+            cookies.put(UIDS_COOKIE_NAME, Base64.urlEncoder.encodeToString(encode(uidsCookie).bytes))
+        }
+
+        postCookieSync(cookieSyncRequest, cookies, header)
+    }
+
+    private Response postCookieSync(CookieSyncRequest cookieSyncRequest,
+                                    Map<String, ?> cookies,
+                                    Map<String, ?> headers) {
+        def requestSpecification = given(requestSpecification)
+                .body(encode(cookieSyncRequest))
+
+        if (cookies) {
+            requestSpecification.cookies(cookies)
+        }
+
+        if (headers) {
+            requestSpecification.headers(headers)
+        }
+
+        requestSpecification.post(COOKIE_SYNC_ENDPOINT)
+    }
+
     private Response getAmp(AmpRequest ampRequest, Map<String, String> headers = [:]) {
         given(requestSpecification).headers(headers)
-                                   .queryParams(mapper.toMap(ampRequest))
+                                   .queryParams(toMap(ampRequest))
                                    .get(AMP_ENDPOINT)
     }
 
-    private void checkResponseStatusCode(Response response) {
-        def statusCode = response.statusCode
-        if (statusCode != 200) {
+    private void checkResponseStatusCode(Response response, int statusCode = 200) {
+        def responseStatusCode = response.statusCode
+        if (responseStatusCode != statusCode) {
             def responseBody = response.body.asString()
             log.error(responseBody)
-            throw new PrebidServerException(statusCode, responseBody, getHeaders(response))
+            throw new PrebidServerException(responseStatusCode, responseBody, getHeaders(response))
         }
     }
 
@@ -277,27 +359,25 @@ class PrebidServerService {
         response.headers().collectEntries { [it.name, it.value] }
     }
 
-    private UidsCookie getDecodedUidsCookie(Response response) {
-        def uids = response.detailedCookie("uids")?.value
+    private static UidsCookie getDecodedUidsCookie(Response response) {
+        def uids = response.detailedCookie(UIDS_COOKIE_NAME)?.value
         if (uids) {
-            return mapper.decode(new String(Base64.urlDecoder.decode(uids)), UidsCookie)
+            return decode(new String(Base64.urlDecoder.decode(uids)), UidsCookie)
         } else {
             throw new IllegalStateException("uids cookie is missing in response")
         }
     }
 
-    List<String> getLogsByTime(Instant testStart,
-                               Instant testEnd = Instant.now()) {
-        if (!testEnd.isAfter(testStart)) {
+    List<String> getLogsByTime(Instant testStart, Instant testEnd = Instant.now()) {
+        if (testEnd.isBefore(testStart)) {
             throw new IllegalArgumentException("The end time of the test is less than the start time")
         }
-
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-                                                       .withZone(ZoneId.from(UTC))
+        def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                                         .withZone(ZoneId.from(UTC))
         def logs = Arrays.asList(pbsContainer.logs.split("\n"))
         def filteredLogs = []
 
-        def deltaTime = Duration.between(testStart, testEnd).seconds
+        def deltaTime = Duration.between(testStart, testEnd).plusSeconds(1).seconds
 
         for (int i = 0; i <= deltaTime; i++) {
             def time = testStart.plusSeconds(i)
@@ -308,5 +388,25 @@ class PrebidServerService {
             }
         }
         filteredLogs
+    }
+
+    <T> T getValueFromContainer(String path, Class<T> clazz) {
+        pbsContainer.copyFileFromContainer(path, { inputStream ->
+            return decode(inputStream, clazz)
+        })
+    }
+
+    Boolean isFileExist(String path) {
+        pbsContainer.execInContainer("test", "-f", path).getExitCode() == 0
+    }
+
+    void deleteFilesInDirectory(String directoryPath) {
+        pbsContainer.execInContainer("find", directoryPath, "-maxdepth", "${Integer.MAX_VALUE}", "-type", "f", "-exec", "rm", "-f", "{}", "+")
+    }
+
+    private static RequestSpecification buildAndGetRequestSpecification(String uri, AuthenticationScheme authScheme) {
+        new RequestSpecBuilder().setBaseUri(uri)
+                                .setAuth(authScheme)
+                                .build()
     }
 }

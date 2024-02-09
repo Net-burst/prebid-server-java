@@ -27,7 +27,7 @@ import org.prebid.server.VertxTest;
 import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.auction.model.BidderRequest;
 import org.prebid.server.auction.model.BidderResponse;
-import org.prebid.server.auction.model.DebugContext;
+import org.prebid.server.auction.model.debug.DebugContext;
 import org.prebid.server.bidder.model.BidderBid;
 import org.prebid.server.bidder.model.BidderSeatBid;
 import org.prebid.server.execution.TimeoutFactory;
@@ -47,6 +47,7 @@ import org.prebid.server.hooks.execution.model.StageExecutionPlan;
 import org.prebid.server.hooks.execution.model.StageWithHookType;
 import org.prebid.server.hooks.execution.v1.auction.AuctionRequestPayloadImpl;
 import org.prebid.server.hooks.execution.v1.auction.AuctionResponsePayloadImpl;
+import org.prebid.server.hooks.execution.v1.bidder.AllProcessedBidResponsesPayloadImpl;
 import org.prebid.server.hooks.execution.v1.bidder.BidderRequestPayloadImpl;
 import org.prebid.server.hooks.execution.v1.bidder.BidderResponsePayloadImpl;
 import org.prebid.server.hooks.execution.v1.entrypoint.EntrypointPayloadImpl;
@@ -65,6 +66,8 @@ import org.prebid.server.hooks.v1.auction.AuctionResponseHook;
 import org.prebid.server.hooks.v1.auction.AuctionResponsePayload;
 import org.prebid.server.hooks.v1.auction.ProcessedAuctionRequestHook;
 import org.prebid.server.hooks.v1.auction.RawAuctionRequestHook;
+import org.prebid.server.hooks.v1.bidder.AllProcessedBidResponsesHook;
+import org.prebid.server.hooks.v1.bidder.AllProcessedBidResponsesPayload;
 import org.prebid.server.hooks.v1.bidder.BidderInvocationContext;
 import org.prebid.server.hooks.v1.bidder.BidderRequestHook;
 import org.prebid.server.hooks.v1.bidder.BidderRequestPayload;
@@ -85,7 +88,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
-import java.util.stream.Collectors;
+import java.util.function.Function;
+import java.util.function.UnaryOperator;
 
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
@@ -232,8 +236,10 @@ public class HookStageExecutorTest extends VertxTest {
         givenEntrypointHook(
                 "module-alpha",
                 "hook-a",
-                immediateHook(InvocationResultImpl.succeeded(payload -> EntrypointPayloadImpl.of(
-                        payload.queryParams(), payload.headers(), payload.body() + "-abc"))));
+                immediateHook(InvocationResultImpl.succeeded(
+                        payload -> EntrypointPayloadImpl.of(
+                                payload.queryParams(), payload.headers(), payload.body() + "-abc"),
+                        "moduleAlphaContext")));
 
         givenEntrypointHook(
                 "module-alpha",
@@ -250,8 +256,10 @@ public class HookStageExecutorTest extends VertxTest {
         givenEntrypointHook(
                 "module-beta",
                 "hook-b",
-                immediateHook(InvocationResultImpl.succeeded(payload -> EntrypointPayloadImpl.of(
-                        payload.queryParams(), payload.headers(), payload.body() + "-jkl"))));
+                immediateHook(InvocationResultImpl.succeeded(
+                        payload -> EntrypointPayloadImpl.of(
+                                payload.queryParams(), payload.headers(), payload.body() + "-jkl"),
+                        "moduleBetaContext")));
 
         final HookStageExecutor executor = createExecutor(
                 executionPlan(singletonMap(
@@ -269,7 +277,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.isShouldReject()).isFalse();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
@@ -281,7 +289,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -326,10 +334,15 @@ public class HookStageExecutorTest extends VertxTest {
                                         });
                                     }));
 
+            final Map<String, Object> expectedModuleContexts = new HashMap<>();
+            expectedModuleContexts.put("module-alpha", null);
+            expectedModuleContexts.put("module-beta", "moduleBetaContext");
+            assertThat(hookExecutionContext.getModuleContexts()).containsExactlyEntriesOf(expectedModuleContexts);
+
             async.complete();
         }));
 
-        async.awaitSuccess(150L);
+        async.awaitSuccess();
     }
 
     @Test
@@ -349,7 +362,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.getPayload()).satisfies(payload ->
                     assertThat(payload.body()).isEqualTo("body"));
 
@@ -384,7 +397,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.getPayload()).satisfies(payload ->
                     assertThat(payload.body()).isEqualTo("body"));
 
@@ -445,7 +458,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.body()).isEqualTo("body-jkl"));
@@ -455,7 +468,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -560,7 +573,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.body()).isEqualTo("body-jkl"));
@@ -570,7 +583,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -662,7 +675,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.getPayload()).satisfies(payload ->
                     assertThat(payload.body()).isEqualTo("body-ghi-jkl"));
 
@@ -671,7 +684,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -753,7 +766,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.isShouldReject()).isTrue();
             assertThat(result.getPayload()).isNull();
 
@@ -762,7 +775,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -833,7 +846,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.isShouldReject()).isTrue();
             assertThat(result.getPayload()).isNull();
 
@@ -842,7 +855,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -936,7 +949,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.body()).isEqualTo("body"));
 
@@ -945,7 +958,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.entrypoint,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("http-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -1033,7 +1046,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(hookExecutionContext.getStageOutcomes())
                     .hasEntrySatisfying(
                             Stage.entrypoint,
@@ -1090,7 +1103,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<InvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(InvocationContext.class);
             verify(hookImpl, times(4)).call(any(), invocationContextCaptor.capture());
@@ -1158,7 +1171,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidRequest()).isSameAs(bidRequest));
 
@@ -1217,7 +1230,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidRequest()).isSameAs(bidRequest));
 
@@ -1276,7 +1289,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidRequest()).isEqualTo(BidRequest.builder()
@@ -1288,7 +1301,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.raw_auction_request,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("auction-request");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -1366,7 +1379,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidRequest()).isEqualTo(BidRequest.builder()
@@ -1432,7 +1445,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<AuctionInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(AuctionInvocationContext.class);
             verify(hookImpl, times(4)).call(any(), invocationContextCaptor.capture());
@@ -1533,7 +1546,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<AuctionInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(AuctionInvocationContext.class);
             verify(hookImpl, times(6)).call(any(), invocationContextCaptor.capture());
@@ -1594,7 +1607,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.isShouldReject()).isTrue();
             assertThat(result.getPayload()).isNull();
 
@@ -1652,7 +1665,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidRequest()).isEqualTo(BidRequest.builder()
@@ -1719,7 +1732,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<AuctionInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(AuctionInvocationContext.class);
             verify(hookImpl, times(4)).call(any(), invocationContextCaptor.capture());
@@ -1821,7 +1834,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<AuctionInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(AuctionInvocationContext.class);
             verify(hookImpl, times(6)).call(any(), invocationContextCaptor.capture());
@@ -1884,7 +1897,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.isShouldReject()).isTrue();
             assertThat(result.getPayload()).isNull();
 
@@ -1938,15 +1951,21 @@ public class HookStageExecutorTest extends VertxTest {
 
         // when
         final Future<HookStageExecutionResult<BidderRequestPayload>> future1 = executor.executeBidderRequestStage(
-                BidderRequest.of("bidder1", null, BidRequest.builder().build()),
+                BidderRequest.builder()
+                        .bidder("bidder1")
+                        .bidRequest(BidRequest.builder().build())
+                        .build(),
                 auctionContext);
         final Future<HookStageExecutionResult<BidderRequestPayload>> future2 = executor.executeBidderRequestStage(
-                BidderRequest.of("bidder2", null, BidRequest.builder().build()),
+                BidderRequest.builder()
+                        .bidder("bidder2")
+                        .bidRequest(BidRequest.builder().build())
+                        .build(),
                 auctionContext);
 
         // then
         final Async async = context.async();
-        future1.setHandler(context.asyncAssertSuccess(result -> {
+        future1.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidRequest()).isEqualTo(BidRequest.builder()
@@ -1959,7 +1978,7 @@ public class HookStageExecutorTest extends VertxTest {
             async.complete();
         }));
 
-        CompositeFuture.join(future1, future2).setHandler(context.asyncAssertSuccess(result ->
+        CompositeFuture.join(future1, future2).onComplete(context.asyncAssertSuccess(result ->
                 assertThat(hookExecutionContext.getStageOutcomes())
                         .hasEntrySatisfying(
                                 Stage.bidder_request,
@@ -1989,7 +2008,10 @@ public class HookStageExecutorTest extends VertxTest {
 
         // when
         final Future<HookStageExecutionResult<BidderRequestPayload>> future = executor.executeBidderRequestStage(
-                BidderRequest.of("bidder1", null, BidRequest.builder().build()),
+                BidderRequest.builder()
+                        .bidder("bidder1")
+                        .bidRequest(BidRequest.builder().build())
+                        .build(),
                 AuctionContext.builder()
                         .bidRequest(BidRequest.builder().build())
                         .account(Account.builder()
@@ -2002,7 +2024,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<BidderInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(BidderInvocationContext.class);
             verify(hookImpl).call(any(), invocationContextCaptor.capture());
@@ -2032,7 +2054,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().id("bidId").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         givenRawBidderResponseHook(
                 "module-alpha",
@@ -2043,7 +2065,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().adid("adId").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         givenRawBidderResponseHook(
                 "module-beta",
@@ -2054,7 +2076,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().cid("cid").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         givenRawBidderResponseHook(
                 "module-beta",
@@ -2065,7 +2087,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().adm("adm").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         final HookStageExecutor executor = createExecutor(
                 executionPlan(singletonMap(
@@ -2086,22 +2108,16 @@ public class HookStageExecutorTest extends VertxTest {
         final Future<HookStageExecutionResult<BidderResponsePayload>> future1 = executor.executeRawBidderResponseStage(
                 BidderResponse.of(
                         "bidder1",
-                        BidderSeatBid.of(
-                                singletonList(BidderBid.of(Bid.builder().build(), BidType.banner, "USD")),
-                                emptyList(),
-                                emptyList()),
+                        BidderSeatBid.of(singletonList(BidderBid.of(Bid.builder().build(), BidType.banner, "USD"))),
                         0),
                 auctionContext);
         final Future<HookStageExecutionResult<BidderResponsePayload>> future2 = executor.executeRawBidderResponseStage(
-                BidderResponse.of(
-                        "bidder2",
-                        BidderSeatBid.of(emptyList(), emptyList(), emptyList()),
-                        0),
+                BidderResponse.of("bidder2", BidderSeatBid.empty(), 0),
                 auctionContext);
 
         // then
         final Async async = context.async();
-        future1.setHandler(context.asyncAssertSuccess(result -> {
+        future1.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bids()).containsOnly(BidderBid.of(
@@ -2117,7 +2133,7 @@ public class HookStageExecutorTest extends VertxTest {
             async.complete();
         }));
 
-        CompositeFuture.join(future1, future2).setHandler(context.asyncAssertSuccess(result ->
+        CompositeFuture.join(future1, future2).onComplete(context.asyncAssertSuccess(result ->
                 assertThat(hookExecutionContext.getStageOutcomes())
                         .hasEntrySatisfying(
                                 Stage.raw_bidder_response,
@@ -2149,10 +2165,7 @@ public class HookStageExecutorTest extends VertxTest {
         final Future<HookStageExecutionResult<BidderResponsePayload>> future = executor.executeRawBidderResponseStage(
                 BidderResponse.of(
                         "bidder1",
-                        BidderSeatBid.of(
-                                singletonList(BidderBid.of(Bid.builder().build(), BidType.banner, "USD")),
-                                emptyList(),
-                                emptyList()),
+                        BidderSeatBid.of(singletonList(BidderBid.of(Bid.builder().build(), BidType.banner, "USD"))),
                         0),
                 AuctionContext.builder()
                         .bidRequest(BidRequest.builder().build())
@@ -2166,7 +2179,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<BidderInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(BidderInvocationContext.class);
             verify(hookImpl).call(any(), invocationContextCaptor.capture());
@@ -2196,7 +2209,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().id("bidId").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         givenProcessedBidderResponseHook(
                 "module-alpha",
@@ -2207,7 +2220,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().adid("adId").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         givenProcessedBidderResponseHook(
                 "module-beta",
@@ -2218,7 +2231,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().cid("cid").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         givenProcessedBidderResponseHook(
                 "module-beta",
@@ -2229,7 +2242,7 @@ public class HookStageExecutorTest extends VertxTest {
                                         bid.getBid().toBuilder().adm("adm").build(),
                                         bid.getType(),
                                         bid.getBidCurrency()))
-                                .collect(Collectors.toList())))));
+                                .toList()))));
 
         final HookStageExecutor executor = createExecutor(
                 executionPlan(singletonMap(
@@ -2251,23 +2264,18 @@ public class HookStageExecutorTest extends VertxTest {
                 executor.executeProcessedBidderResponseStage(
                         BidderResponse.of(
                                 "bidder1",
-                                BidderSeatBid.of(
-                                        singletonList(BidderBid.of(Bid.builder().build(), BidType.banner, "USD")),
-                                        emptyList(),
-                                        emptyList()),
+                                BidderSeatBid.of(singletonList(
+                                        BidderBid.of(Bid.builder().build(), BidType.banner, "USD"))),
                                 0),
                         auctionContext);
         final Future<HookStageExecutionResult<BidderResponsePayload>> future2 =
                 executor.executeProcessedBidderResponseStage(
-                        BidderResponse.of(
-                                "bidder2",
-                                BidderSeatBid.of(emptyList(), emptyList(), emptyList()),
-                                0),
+                        BidderResponse.of("bidder2", BidderSeatBid.empty(), 0),
                         auctionContext);
 
         // then
         final Async async = context.async();
-        future1.setHandler(context.asyncAssertSuccess(result -> {
+        future1.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bids()).containsOnly(BidderBid.of(
@@ -2283,7 +2291,7 @@ public class HookStageExecutorTest extends VertxTest {
             async.complete();
         }));
 
-        CompositeFuture.join(future1, future2).setHandler(context.asyncAssertSuccess(result ->
+        CompositeFuture.join(future1, future2).onComplete(context.asyncAssertSuccess(result ->
                 assertThat(hookExecutionContext.getStageOutcomes())
                         .hasEntrySatisfying(
                                 Stage.processed_bidder_response,
@@ -2317,10 +2325,8 @@ public class HookStageExecutorTest extends VertxTest {
                 executor.executeProcessedBidderResponseStage(
                         BidderResponse.of(
                                 "bidder1",
-                                BidderSeatBid.of(
-                                        singletonList(BidderBid.of(Bid.builder().build(), BidType.banner, "USD")),
-                                        emptyList(),
-                                        emptyList()),
+                                BidderSeatBid.of(singletonList(
+                                        BidderBid.of(Bid.builder().build(), BidType.banner, "USD"))),
                                 0),
                         AuctionContext.builder()
                                 .bidRequest(BidRequest.builder().build())
@@ -2334,7 +2340,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<BidderInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(BidderInvocationContext.class);
             verify(hookImpl).call(any(), invocationContextCaptor.capture());
@@ -2344,6 +2350,173 @@ public class HookStageExecutorTest extends VertxTest {
                 assertThat(invocationContext.timeout()).isNotNull();
                 assertThat(invocationContext.accountConfig()).isNotNull();
                 assertThat(invocationContext.bidder()).isEqualTo("bidder1");
+            });
+
+            async.complete();
+        }));
+
+        async.awaitSuccess();
+    }
+
+    @Test
+    public void shouldExecuteAllProcessedBidResponsesHooksHappyPath() {
+        final Function<BiFunction<String, BidderBid, BidderBid>, UnaryOperator<BidderResponse>> bidModifierForResponse =
+                (BiFunction<String, BidderBid, BidderBid> bidModifier) ->
+                        (BidderResponse response) -> {
+                            final BidderSeatBid seatBid = response.getSeatBid();
+                            final List<BidderBid> modifiedBids = seatBid.getBids().stream()
+                                    .map(bidderBid -> bidModifier.apply(response.getBidder(), bidderBid))
+                                    .toList();
+                            return response.with(seatBid.with(modifiedBids));
+                        };
+
+        // given
+        givenAllProcessedBidderResponsesHook(
+                "module-alpha",
+                "hook-a",
+                immediateHook(InvocationResultImpl.succeeded(payload -> AllProcessedBidResponsesPayloadImpl.of(
+                        payload.bidResponses().stream()
+                                .map(bidModifierForResponse.apply(
+                                        (bidder, bid) -> BidderBid.of(
+                                                bid.getBid().toBuilder().id(bidder + "-bidId").build(),
+                                                bid.getType(),
+                                                bid.getBidCurrency())))
+                                .toList()))));
+
+        givenAllProcessedBidderResponsesHook(
+                "module-alpha",
+                "hook-b",
+                immediateHook(InvocationResultImpl.succeeded(payload -> AllProcessedBidResponsesPayloadImpl.of(
+                        payload.bidResponses().stream()
+                                .map(bidModifierForResponse.apply(
+                                        (bidder, bid) -> BidderBid.of(
+                                                bid.getBid().toBuilder().adid(bidder + "-adId").build(),
+                                                bid.getType(),
+                                                bid.getBidCurrency())))
+                                .toList()))));
+
+        givenAllProcessedBidderResponsesHook(
+                "module-beta",
+                "hook-a",
+                immediateHook(InvocationResultImpl.succeeded(payload -> AllProcessedBidResponsesPayloadImpl.of(
+                        payload.bidResponses().stream()
+                                .map(bidModifierForResponse.apply(
+                                        (bidder, bid) -> BidderBid.of(
+                                                bid.getBid().toBuilder().cid(bidder + "-cid").build(),
+                                                bid.getType(),
+                                                bid.getBidCurrency())))
+                                .toList()))));
+
+        givenAllProcessedBidderResponsesHook(
+                "module-beta",
+                "hook-b",
+                immediateHook(InvocationResultImpl.succeeded(payload -> AllProcessedBidResponsesPayloadImpl.of(
+                        payload.bidResponses().stream()
+                                .map(bidModifierForResponse.apply(
+                                        (bidder, bid) -> BidderBid.of(
+                                                bid.getBid().toBuilder().adm(bidder + "-adm").build(),
+                                                bid.getType(),
+                                                bid.getBidCurrency())))
+                                .toList()))));
+
+        final HookStageExecutor executor = createExecutor(
+                executionPlan(singletonMap(
+                        Endpoint.openrtb2_auction,
+                        EndpointExecutionPlan.of(singletonMap(
+                                Stage.all_processed_bid_responses,
+                                execPlanTwoGroupsTwoHooksEach())))));
+
+        final HookExecutionContext hookExecutionContext = HookExecutionContext.of(Endpoint.openrtb2_auction);
+        final AuctionContext auctionContext = AuctionContext.builder()
+                .bidRequest(BidRequest.builder().build())
+                .account(Account.empty("accountId"))
+                .hookExecutionContext(hookExecutionContext)
+                .debugContext(DebugContext.empty())
+                .build();
+
+        // when
+        final Future<HookStageExecutionResult<AllProcessedBidResponsesPayload>> result =
+                executor.executeAllProcessedBidResponsesStage(
+                        List.of(
+                                BidderResponse.of(
+                                        "bidder1",
+                                        BidderSeatBid.of(singletonList(
+                                                BidderBid.of(Bid.builder().build(), BidType.banner, "USD"))), 0),
+                                BidderResponse.of("bidder2",
+                                        BidderSeatBid.of(singletonList(
+                                                BidderBid.of(Bid.builder().build(), BidType.video, "UAH"))), 0)),
+                        auctionContext);
+
+        // then
+        final Bid expectedBid1 = Bid.builder()
+                .id("bidder1-bidId")
+                .adid("bidder1-adId")
+                .cid("bidder1-cid")
+                .adm("bidder1-adm")
+                .build();
+        final Bid expectedBid2 = Bid.builder()
+                .id("bidder2-bidId")
+                .adid("bidder2-adId")
+                .cid("bidder2-cid")
+                .adm("bidder2-adm")
+                .build();
+
+        final List<BidderResponse> expectedBidderResponses = List.of(
+                BidderResponse.of("bidder1", BidderSeatBid.of(singletonList(
+                        BidderBid.of(expectedBid1, BidType.banner, "USD"))), 0),
+                BidderResponse.of("bidder2", BidderSeatBid.of(singletonList(
+                        BidderBid.of(expectedBid2, BidType.video, "UAH"))), 0));
+
+        assertThat(result).succeededWith(
+                HookStageExecutionResult.of(false, AllProcessedBidResponsesPayloadImpl.of(expectedBidderResponses)));
+    }
+
+    @Test
+    public void shouldExecuteAllProcessedBidResponsesHooksAndPassAuctionInvocationContext(TestContext context) {
+        // given
+        final AllProcessedBidResponsesHookImpl hookImpl = spy(
+                AllProcessedBidResponsesHookImpl.of(immediateHook(InvocationResultImpl.succeeded(identity()))));
+        given(hookCatalog.hookById(eq("module-alpha"), eq("hook-a"), eq(StageWithHookType.ALL_PROCESSED_BID_RESPONSES)))
+                .willReturn(hookImpl);
+
+        final HookStageExecutor executor = createExecutor(
+                executionPlan(singletonMap(
+                        Endpoint.openrtb2_auction,
+                        EndpointExecutionPlan.of(singletonMap(
+                                Stage.all_processed_bid_responses,
+                                execPlanOneGroupOneHook("module-alpha", "hook-a"))))));
+
+        final HookExecutionContext hookExecutionContext = HookExecutionContext.of(Endpoint.openrtb2_auction);
+
+        // when
+        final Future<HookStageExecutionResult<AllProcessedBidResponsesPayload>> future =
+                executor.executeAllProcessedBidResponsesStage(
+                        singletonList(BidderResponse.of(
+                                "bidder1",
+                                BidderSeatBid.of(singletonList(
+                                        BidderBid.of(Bid.builder().build(), BidType.banner, "USD"))),
+                                0)),
+                        AuctionContext.builder()
+                                .bidRequest(BidRequest.builder().build())
+                                .account(Account.builder()
+                                        .hooks(AccountHooksConfiguration.of(
+                                                null, singletonMap("module-alpha", mapper.createObjectNode())))
+                                        .build())
+                                .hookExecutionContext(hookExecutionContext)
+                                .debugContext(DebugContext.empty())
+                                .build());
+
+        // then
+        final Async async = context.async();
+        future.onComplete(context.asyncAssertSuccess(result -> {
+            final ArgumentCaptor<AuctionInvocationContext> invocationContextCaptor =
+                    ArgumentCaptor.forClass(AuctionInvocationContext.class);
+            verify(hookImpl).call(any(), invocationContextCaptor.capture());
+
+            assertThat(invocationContextCaptor.getValue()).satisfies(invocationContext -> {
+                assertThat(invocationContext.endpoint()).isNotNull();
+                assertThat(invocationContext.timeout()).isNotNull();
+                assertThat(invocationContext.accountConfig()).isNotNull();
             });
 
             async.complete();
@@ -2370,7 +2543,10 @@ public class HookStageExecutorTest extends VertxTest {
 
         // when
         final Future<HookStageExecutionResult<BidderRequestPayload>> future = executor.executeBidderRequestStage(
-                BidderRequest.of("bidder1", null, BidRequest.builder().build()),
+                BidderRequest.builder()
+                        .bidder("bidder1")
+                        .bidRequest(BidRequest.builder().build())
+                        .build(),
                 AuctionContext.builder()
                         .account(Account.empty("accountId"))
                         .hookExecutionContext(hookExecutionContext)
@@ -2379,7 +2555,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.isShouldReject()).isTrue();
             assertThat(result.getPayload()).isNull();
 
@@ -2437,7 +2613,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result).isNotNull();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidResponse()).isEqualTo(BidResponse.builder()
@@ -2484,7 +2660,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             final ArgumentCaptor<AuctionInvocationContext> invocationContextCaptor =
                     ArgumentCaptor.forClass(AuctionInvocationContext.class);
             verify(hookImpl).call(any(), invocationContextCaptor.capture());
@@ -2528,7 +2704,7 @@ public class HookStageExecutorTest extends VertxTest {
 
         // then
         final Async async = context.async();
-        future.setHandler(context.asyncAssertSuccess(result -> {
+        future.onComplete(context.asyncAssertSuccess(result -> {
             assertThat(result.isShouldReject()).isFalse();
             assertThat(result.getPayload()).isNotNull().satisfies(payload ->
                     assertThat(payload.bidResponse()).isNotNull());
@@ -2538,7 +2714,7 @@ public class HookStageExecutorTest extends VertxTest {
                             Stage.auction_response,
                             stageOutcomes -> assertThat(stageOutcomes)
                                     .hasSize(1)
-                                    .hasOnlyOneElementSatisfying(stageOutcome -> {
+                                    .allSatisfy(stageOutcome -> {
                                         assertThat(stageOutcome.getEntity()).isEqualTo("auction-response");
 
                                         final List<GroupExecutionOutcome> groups = stageOutcome.getGroups();
@@ -2652,6 +2828,18 @@ public class HookStageExecutorTest extends VertxTest {
 
         given(hookCatalog.hookById(eq(moduleCode), eq(hookImplCode), eq(StageWithHookType.PROCESSED_BIDDER_RESPONSE)))
                 .willReturn(ProcessedBidderResponseHookImpl.of(delegate));
+    }
+
+    private void givenAllProcessedBidderResponsesHook(
+            String moduleCode,
+            String hookImplCode,
+            BiFunction<
+                    AllProcessedBidResponsesPayload,
+                    AuctionInvocationContext,
+                    Future<InvocationResult<AllProcessedBidResponsesPayload>>> delegate) {
+
+        given(hookCatalog.hookById(eq(moduleCode), eq(hookImplCode), eq(StageWithHookType.ALL_PROCESSED_BID_RESPONSES)))
+                .willReturn(AllProcessedBidResponsesHookImpl.of(delegate));
     }
 
     private void givenAuctionResponseHook(
@@ -2829,6 +3017,31 @@ public class HookStageExecutorTest extends VertxTest {
         @Override
         public Future<InvocationResult<BidderResponsePayload>> call(BidderResponsePayload payload,
                                                                     BidderInvocationContext invocationContext) {
+
+            return delegate.apply(payload, invocationContext);
+        }
+
+        @Override
+        public String code() {
+            return code;
+        }
+    }
+
+    @Value(staticConstructor = "of")
+    @NonFinal
+    private static class AllProcessedBidResponsesHookImpl implements AllProcessedBidResponsesHook {
+
+        String code = "hook-code";
+
+        BiFunction<
+                AllProcessedBidResponsesPayload,
+                AuctionInvocationContext,
+                Future<InvocationResult<AllProcessedBidResponsesPayload>>> delegate;
+
+        @Override
+        public Future<InvocationResult<AllProcessedBidResponsesPayload>> call(
+                AllProcessedBidResponsesPayload payload,
+                AuctionInvocationContext invocationContext) {
 
             return delegate.apply(payload, invocationContext);
         }

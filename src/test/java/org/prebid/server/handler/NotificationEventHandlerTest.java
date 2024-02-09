@@ -4,7 +4,6 @@ import io.netty.util.AsciiString;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.CaseInsensitiveHeaders;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.ext.web.RoutingContext;
@@ -16,8 +15,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.prebid.server.VertxTest;
-import org.prebid.server.analytics.AnalyticsReporterDelegator;
+import org.prebid.server.activity.infrastructure.creator.ActivityInfrastructureCreator;
 import org.prebid.server.analytics.model.NotificationEvent;
+import org.prebid.server.analytics.reporter.AnalyticsReporterDelegator;
 import org.prebid.server.auction.model.Tuple2;
 import org.prebid.server.cookie.UidsCookieService;
 import org.prebid.server.deals.UserService;
@@ -56,6 +56,8 @@ public class NotificationEventHandlerTest extends VertxTest {
     @Mock
     private UserService userService;
     @Mock
+    private ActivityInfrastructureCreator activityInfrastructureCreator;
+    @Mock
     private AnalyticsReporterDelegator analyticsReporterDelegator;
     @Mock
     private TimeoutFactory timeoutFactory;
@@ -76,7 +78,7 @@ public class NotificationEventHandlerTest extends VertxTest {
         given(routingContext.request()).willReturn(httpRequest);
         given(routingContext.response()).willReturn(httpResponse);
 
-        given(httpRequest.headers()).willReturn(new CaseInsensitiveHeaders());
+        given(httpRequest.headers()).willReturn(MultiMap.caseInsensitiveMultiMap());
         given(httpRequest.params()).willReturn(MultiMap.caseInsensitiveMultiMap());
 
         given(httpResponse.putHeader(any(CharSequence.class), any(CharSequence.class))).willReturn(httpResponse);
@@ -86,6 +88,7 @@ public class NotificationEventHandlerTest extends VertxTest {
                 uidsCookieService,
                 applicationEventService,
                 userService,
+                activityInfrastructureCreator,
                 analyticsReporterDelegator,
                 timeoutFactory,
                 applicationSettings,
@@ -304,12 +307,12 @@ public class NotificationEventHandlerTest extends VertxTest {
                 .headers(CaseInsensitiveMultiMap.empty())
                 .build();
 
-        assertThat(captureAnalyticEvent()).isEqualTo(NotificationEvent.builder()
-                .type(NotificationEvent.Type.win)
-                .bidId("bidId")
-                .account(account)
-                .httpContext(expectedHttpContext)
-                .build());
+        assertThat(captureAnalyticEvent()).satisfies(event -> {
+            assertThat(event.getType()).isEqualTo(NotificationEvent.Type.win);
+            assertThat(event.getBidId()).isEqualTo("bidId");
+            assertThat(event.getAccount()).isSameAs(account);
+            assertThat(event.getHttpContext()).isEqualTo(expectedHttpContext);
+        });
     }
 
     @Test
@@ -394,6 +397,7 @@ public class NotificationEventHandlerTest extends VertxTest {
                 uidsCookieService,
                 applicationEventService,
                 userService,
+                activityInfrastructureCreator,
                 analyticsReporterDelegator,
                 timeoutFactory,
                 applicationSettings,
@@ -552,15 +556,15 @@ public class NotificationEventHandlerTest extends VertxTest {
                 .headers(CaseInsensitiveMultiMap.empty())
                 .build();
 
-        assertThat(captureAnalyticEvent()).isEqualTo(NotificationEvent.builder()
-                .type(NotificationEvent.Type.win)
-                .bidId("bidId")
-                .account(account)
-                .bidder("bidder")
-                .timestamp(1000L)
-                .integration("pbjs")
-                .httpContext(expectedHttpContext)
-                .build());
+        assertThat(captureAnalyticEvent()).satisfies(event -> {
+            assertThat(event.getType()).isEqualTo(NotificationEvent.Type.win);
+            assertThat(event.getBidId()).isEqualTo("bidId");
+            assertThat(event.getAccount()).isSameAs(account);
+            assertThat(event.getBidder()).isEqualTo("bidder");
+            assertThat(event.getTimestamp()).isEqualTo(1000L);
+            assertThat(event.getIntegration()).isEqualTo("pbjs");
+            assertThat(event.getHttpContext()).isEqualTo(expectedHttpContext);
+        });
     }
 
     @Test
@@ -597,21 +601,20 @@ public class NotificationEventHandlerTest extends VertxTest {
                 .queryParams(queryParams.build())
                 .headers(CaseInsensitiveMultiMap.empty())
                 .build();
-        final NotificationEvent expectedEvent = NotificationEvent.builder()
-                .type(NotificationEvent.Type.win)
-                .bidId("bidId")
-                .account(Account.builder()
-                        .id("accountId")
-                        .auction(AccountAuctionConfig.builder()
-                                .events(AccountEventsConfig.of(true))
-                                .build())
-                        .build())
-                .httpContext(expectedHttpContext)
-                .lineItemId("lineItemId")
-                .build();
 
         verify(userService).processWinEvent(eq("lineItemId"), eq("bidId"), isNull());
-        verify(analyticsReporterDelegator).processEvent(eq(expectedEvent));
+        assertThat(captureAnalyticEvent()).satisfies(event -> {
+            assertThat(event.getType()).isEqualTo(NotificationEvent.Type.win);
+            assertThat(event.getBidId()).isEqualTo("bidId");
+            assertThat(event.getAccount()).isEqualTo(Account.builder()
+                    .id("accountId")
+                    .auction(AccountAuctionConfig.builder()
+                            .events(AccountEventsConfig.of(true))
+                            .build())
+                    .build());
+            assertThat(event.getHttpContext()).isEqualTo(expectedHttpContext);
+            assertThat(event.getLineItemId()).isEqualTo("lineItemId");
+        });
     }
 
     private Integer captureResponseStatusCode() {

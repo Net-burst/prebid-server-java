@@ -50,7 +50,7 @@ public class OptoutHandler implements Handler<RoutingContext> {
         }
 
         googleRecaptchaVerifier.verify(recaptcha)
-                .setHandler(result -> handleVerification(routingContext, result));
+                .onComplete(result -> handleVerification(routingContext, result));
     }
 
     private void handleVerification(RoutingContext routingContext, AsyncResult<RecaptchaResponse> result) {
@@ -83,7 +83,7 @@ public class OptoutHandler implements Handler<RoutingContext> {
                 response -> response
                         .setStatusCode(HttpResponseStatus.MOVED_PERMANENTLY.code())
                         .putHeader(HttpUtil.LOCATION_HEADER, url)
-                        .putHeader(HttpUtil.SET_COOKIE_HEADER, HttpUtil.toSetCookieHeaderValue(cookie))
+                        .putHeader(HttpUtil.SET_COOKIE_HEADER, cookie.encode())
                         .end());
     }
 

@@ -7,13 +7,16 @@
   "capabilities": {
     "app": {
       "mediaTypes": [
-        "banner"
+        "banner",
+        "video",
+        "native"
       ]
     },
     "site": {
       "mediaTypes": [
         "banner",
-        "video"
+        "video",
+        "native"
       ]
     }
   }

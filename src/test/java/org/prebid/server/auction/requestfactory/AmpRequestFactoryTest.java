@@ -4,11 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.iab.openrtb.request.App;
 import com.iab.openrtb.request.Banner;
 import com.iab.openrtb.request.BidRequest;
+import com.iab.openrtb.request.Dooh;
 import com.iab.openrtb.request.Format;
 import com.iab.openrtb.request.Imp;
 import com.iab.openrtb.request.Publisher;
 import com.iab.openrtb.request.Regs;
 import com.iab.openrtb.request.Site;
+import com.iab.openrtb.request.Source;
 import com.iab.openrtb.request.User;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
@@ -27,11 +29,12 @@ import org.prebid.server.auction.DebugResolver;
 import org.prebid.server.auction.FpdResolver;
 import org.prebid.server.auction.ImplicitParametersExtractor;
 import org.prebid.server.auction.OrtbTypesResolver;
-import org.prebid.server.auction.PrivacyEnforcementService;
 import org.prebid.server.auction.StoredRequestProcessor;
-import org.prebid.server.auction.TimeoutResolver;
+import org.prebid.server.auction.gpp.AmpGppService;
 import org.prebid.server.auction.model.AuctionContext;
-import org.prebid.server.auction.model.DebugContext;
+import org.prebid.server.auction.model.debug.DebugContext;
+import org.prebid.server.auction.privacycontextfactory.AmpPrivacyContextFactory;
+import org.prebid.server.auction.versionconverter.BidRequestOrtbVersionConversionManager;
 import org.prebid.server.exception.InvalidRequestException;
 import org.prebid.server.geolocation.model.GeoInfo;
 import org.prebid.server.metric.MetricName;
@@ -54,7 +57,6 @@ import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidCache;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidCacheBids;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidCacheVastxml;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidChannel;
-import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebidData;
 import org.prebid.server.proto.openrtb.ext.request.ExtRequestTargeting;
 import org.prebid.server.proto.openrtb.ext.request.ExtSite;
 import org.prebid.server.proto.openrtb.ext.request.ExtStoredRequest;
@@ -77,6 +79,7 @@ import static org.apache.commons.lang3.StringUtils.EMPTY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -94,9 +97,13 @@ public class AmpRequestFactoryTest extends VertxTest {
     public final MockitoRule mockitoRule = MockitoJUnit.rule();
 
     @Mock
+    private Ortb2RequestFactory ortb2RequestFactory;
+    @Mock
     private StoredRequestProcessor storedRequestProcessor;
     @Mock
-    private Ortb2RequestFactory ortb2RequestFactory;
+    private BidRequestOrtbVersionConversionManager ortbVersionConversionManager;
+    @Mock
+    private AmpGppService ampGppService;
     @Mock
     private OrtbTypesResolver ortbTypesResolver;
     @Mock
@@ -106,9 +113,7 @@ public class AmpRequestFactoryTest extends VertxTest {
     @Mock
     private FpdResolver fpdResolver;
     @Mock
-    private PrivacyEnforcementService privacyEnforcementService;
-    @Mock
-    private TimeoutResolver timeoutResolver;
+    private AmpPrivacyContextFactory ampPrivacyContextFactory;
     @Mock
     private DebugResolver debugResolver;
 
@@ -125,8 +130,12 @@ public class AmpRequestFactoryTest extends VertxTest {
     public void setUp() {
         defaultBidRequest = BidRequest.builder().build();
 
-        given(timeoutResolver.resolve(any())).willReturn(2000L);
-        given(timeoutResolver.adjustTimeout(anyLong())).willReturn(1900L);
+        given(ortbVersionConversionManager.convertToAuctionSupportedVersion(any()))
+                .willAnswer(invocation -> invocation.getArgument(0));
+
+        given(ampGppService.contextFrom(any())).willReturn(Future.succeededFuture());
+        given(ampGppService.updateBidRequest(any(), any()))
+                .willAnswer(invocation -> invocation.getArgument(0));
 
         given(routingContext.request()).willReturn(httpRequest);
         given(routingContext.queryParams()).willReturn(
@@ -142,6 +151,8 @@ public class AmpRequestFactoryTest extends VertxTest {
                 .willAnswer(invocation -> toHttpRequest(invocation.getArgument(0), invocation.getArgument(1)));
         given(ortb2RequestFactory.restoreResultFromRejection(any()))
                 .willAnswer(invocation -> Future.failedFuture((Throwable) invocation.getArgument(0)));
+        given(ortb2RequestFactory.enrichWithPriceFloors(any())).willAnswer(invocation -> invocation.getArgument(0));
+        given(ortb2RequestFactory.updateTimeout(any(), anyLong())).willAnswer(invocation -> invocation.getArgument(0));
 
         given(fpdResolver.resolveApp(any(), any()))
                 .willAnswer(invocationOnMock -> invocationOnMock.getArgument(0));
@@ -150,27 +161,33 @@ public class AmpRequestFactoryTest extends VertxTest {
         given(fpdResolver.resolveUser(any(), any()))
                 .willAnswer(invocationOnMock -> invocationOnMock.getArgument(0));
         given(fpdResolver.resolveImpExt(any(), any())).willAnswer(invocationOnMock -> invocationOnMock.getArgument(0));
-        given(fpdResolver.resolveBidRequestExt(any(), any())).willAnswer(invocationOnMock -> invocationOnMock
-                .getArgument(0));
-        given(ortb2RequestFactory.populateDealsInfo(any()))
+        given(ortb2RequestFactory.populateUserAdditionalInfo(any()))
                 .willAnswer(invocationOnMock -> Future.succeededFuture(invocationOnMock.getArgument(0)));
+        given(ortb2RequestFactory.activityInfrastructureFrom(any()))
+                .willReturn(Future.succeededFuture());
 
-        given(debugResolver.debugContextFrom(any())).willReturn(DebugContext.of(true, null));
+        given(debugResolver.debugContextFrom(any())).willReturn(DebugContext.of(true, true, null));
         final PrivacyContext defaultPrivacyContext = PrivacyContext.of(
-                Privacy.of("0", EMPTY, Ccpa.EMPTY, 0),
+                Privacy.builder()
+                        .gdpr("0")
+                        .consentString(EMPTY)
+                        .ccpa(Ccpa.EMPTY)
+                        .coppa(0)
+                        .build(),
                 TcfContext.empty());
-        given(privacyEnforcementService.contextFromBidRequest(any()))
+        given(ampPrivacyContextFactory.contextFrom(any()))
                 .willReturn(Future.succeededFuture(defaultPrivacyContext));
 
         target = new AmpRequestFactory(
-                storedRequestProcessor,
                 ortb2RequestFactory,
+                storedRequestProcessor,
+                ortbVersionConversionManager,
+                ampGppService,
                 ortbTypesResolver,
                 implicitParametersExtractor,
                 ortb2ImplicitParametersResolver,
                 fpdResolver,
-                privacyEnforcementService,
-                timeoutResolver,
+                ampPrivacyContextFactory,
                 debugResolver,
                 jacksonMapper);
     }
@@ -239,6 +256,22 @@ public class AmpRequestFactoryTest extends VertxTest {
     }
 
     @Test
+    public void shouldReturnFailedFutureIfStoredBidRequestHasDooh() {
+        // given
+        final Imp imp = Imp.builder().build();
+        givenBidRequest(builder -> builder.dooh(Dooh.builder().build()), imp);
+
+        // when
+        final Future<?> future = target.fromRequest(routingContext, 0L);
+
+        // then
+        assertThat(future.failed()).isTrue();
+        assertThat(future.cause()).isInstanceOf(InvalidRequestException.class);
+        assertThat(((InvalidRequestException) future.cause()).getMessages())
+                .hasSize(1).containsOnly("request.dooh must not exist in AMP stored requests.");
+    }
+
+    @Test
     public void shouldUseQueryParamsModifiedByEntrypointHooks() {
         // given
         routingContext.queryParams().set("debug", "0");
@@ -288,7 +321,7 @@ public class AmpRequestFactoryTest extends VertxTest {
     }
 
     @Test
-    public void shouldEnrichAuctionContextWithDebugContext() throws JsonProcessingException {
+    public void shouldEnrichAuctionContextWithDebugContext() {
         // given
         givenBidRequest();
 
@@ -298,7 +331,7 @@ public class AmpRequestFactoryTest extends VertxTest {
         // then
         verify(debugResolver).debugContextFrom(any());
         assertThat(result.result().getDebugContext())
-                .isEqualTo(DebugContext.of(true, null));
+                .isEqualTo(DebugContext.of(true, true, null));
     }
 
     @Test
@@ -327,7 +360,6 @@ public class AmpRequestFactoryTest extends VertxTest {
                                 .build())
                         .cache(ExtRequestPrebidCache.of(ExtRequestPrebidCacheBids.of(null, null),
                                 ExtRequestPrebidCacheVastxml.of(null, null), null))
-                        .channel(ExtRequestPrebidChannel.of("amp"))
                         .build());
     }
 
@@ -539,21 +571,6 @@ public class AmpRequestFactoryTest extends VertxTest {
                 .extracting(BidRequest::getExt).isNotNull()
                 .extracting(extBidRequest -> extBidRequest.getPrebid().getCache().getBids())
                 .containsExactly(ExtRequestPrebidCacheBids.of(null, null));
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithChannelIfStoredBidRequestExtHasNoChannel() {
-        // given
-        givenBidRequest();
-
-        // when
-        final BidRequest request = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(singletonList(request))
-                .extracting(BidRequest::getExt)
-                .extracting(extBidRequest -> extBidRequest.getPrebid().getChannel())
-                .containsExactly(ExtRequestPrebidChannel.of("amp"));
     }
 
     @Test
@@ -1151,9 +1168,23 @@ public class AmpRequestFactoryTest extends VertxTest {
     }
 
     @Test
-    public void shouldReturnBidRequestWithoutUserWhenGdprConsentQueryParamIsBlank() {
+    public void shouldReturnBidRequestWithoutUserExtConsentWhenConsentAndAddtlConsentAreAbsent() {
         // given
-        routingContext.queryParams().add("gdpr_consent", "");
+        givenBidRequest();
+
+        // when
+        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
+
+        // then
+        assertThat(result.getUser()).isNull();
+    }
+
+    @Test
+    public void shouldReturnBidRequestWithoutUserExtConsentWhenConsentTypeIsNotTcfAndAddtlConsentIsAbsent() {
+        // given
+        routingContext.queryParams()
+                .add("consent_type", "3")
+                .add("consent_string", "consent_string");
 
         givenBidRequest();
 
@@ -1177,7 +1208,7 @@ public class AmpRequestFactoryTest extends VertxTest {
         // then
         assertThat(result.getUser())
                 .isEqualTo(User.builder()
-                        .ext(ExtUser.builder().consent("BONV8oqONXwgmADACHENAO7pqzAAppY").build())
+                        .consent("BONV8oqONXwgmADACHENAO7pqzAAppY")
                         .build());
     }
 
@@ -1196,56 +1227,8 @@ public class AmpRequestFactoryTest extends VertxTest {
         // then
         assertThat(result.getUser())
                 .isEqualTo(User.builder()
-                        .ext(ExtUser.builder().consent("BONV8oqONXwgmADACHENAO7pqzAAppY").build())
+                        .consent("BONV8oqONXwgmADACHENAO7pqzAAppY")
                         .build());
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutUserExtConsentWhenGdprConsentIsValidAndConsentTypeIsTCFV1() {
-        // given
-        routingContext.queryParams()
-                .add("gdpr_consent", "BONV8oqONXwgmADACHENAO7pqzAAppY")
-                .add("consent_type", "1");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getUser()).isNull();
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutUserExtConsentWhenGdprConsentIsValidAndConsentTypeIsUsPrivacy() {
-        // given
-        routingContext.queryParams()
-                .add("gdpr_consent", "BONV8oqONXwgmADACHENAO7pqzAAppY")
-                .add("consent_type", "3");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getUser()).isNull();
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutUserExtConsentWhenGdprConsentIsValidAndConsentTypeIsUnknown() {
-        // given
-        routingContext.queryParams()
-                .add("gdpr_consent", "BONV8oqONXwgmADACHENAO7pqzAAppY")
-                .add("consent_type", "23");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getUser()).isNull();
     }
 
     @Test
@@ -1269,86 +1252,6 @@ public class AmpRequestFactoryTest extends VertxTest {
     }
 
     @Test
-    public void shouldReturnBidRequestWithoutProvidersSettingsIfAddtlConsentIsMissed() {
-        // given
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getUser()).isNull();
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutProvidersSettingsIfAddtlConsentIsBlank() {
-        // given
-        routingContext.queryParams()
-                .add("addtl_consent", "  ");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getUser()).isNull();
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutUserWhenGdprConsentQueryParamIsInvalid() {
-        // given
-        routingContext.queryParams().add("gdpr_consent", "consent-value");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getUser()).isNull();
-    }
-
-    @Test
-    public void shouldAddErrorToAuctionContextWhenGdprConsentQueryParamIsInvalid() {
-        // given
-        routingContext.queryParams().add("gdpr_consent", "consent-value");
-
-        givenBidRequest();
-
-        // when
-        final AuctionContext result = target.fromRequest(routingContext, 0L).result();
-
-        // then
-        assertThat(result.getPrebidErrors())
-                .contains("Amp request parameter consent_string or gdpr_consent have invalid format: consent-value");
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithExtPrebidDataBiddersUpdatedByFpdResolver() throws JsonProcessingException {
-        // given
-        routingContext.queryParams()
-                .add("targeting", mapper.writeValueAsString(
-                        Targeting.of(Arrays.asList("appnexus", "rubicon"), null, null)));
-
-        given(fpdResolver.resolveBidRequestExt(any(), any()))
-                .willReturn(ExtRequest.of(ExtRequestPrebid.builder()
-                        .data(ExtRequestPrebidData.of(Arrays.asList("appnexus", "rubicon"), null)).build()));
-
-        givenBidRequest();
-
-        // when
-        final BidRequest request = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        verify(fpdResolver).resolveBidRequestExt(any(), any());
-        assertThat(request)
-                .extracting(BidRequest::getExt)
-                .isEqualTo(ExtRequest.of(ExtRequestPrebid.builder()
-                        .data(ExtRequestPrebidData.of(Arrays.asList("appnexus", "rubicon"), null)).build()));
-    }
-
-    @Test
     public void shouldReturnBidRequestImpExtContextDataWithTargetingAttributes() throws JsonProcessingException {
         // given
         routingContext.queryParams()
@@ -1365,7 +1268,6 @@ public class AmpRequestFactoryTest extends VertxTest {
         final BidRequest request = target.fromRequest(routingContext, 0L).result().getBidRequest();
 
         // then
-        verify(fpdResolver).resolveBidRequestExt(any(), any());
         assertThat(singletonList(request))
                 .flatExtracting(BidRequest::getImp)
                 .containsOnly(Imp.builder().secure(1).ext(mapper.createObjectNode().set("context",
@@ -1391,18 +1293,6 @@ public class AmpRequestFactoryTest extends VertxTest {
     }
 
     @Test
-    public void shouldReturnBidRequestWithoutRegsExtWhenNoPrivacyPolicyIsExist() {
-        // given
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getRegs()).isNull();
-    }
-
-    @Test
     public void shouldReturnBidRequestWithRegsContainsGdprEqualOneIfGdprAppliesIsTrue() {
         // given
         routingContext.queryParams().add("gdpr_applies", "true");
@@ -1414,7 +1304,64 @@ public class AmpRequestFactoryTest extends VertxTest {
 
         // then
         assertThat(result.getRegs())
-                .isEqualTo(Regs.of(null, ExtRegs.of(1, null)));
+                .isEqualTo(Regs.builder().gdpr(1).build());
+    }
+
+    @Test
+    public void shouldNotAddErrorToAuctionContextIfNoConsentParamProvided() {
+        // given
+        givenBidRequest();
+
+        // when
+        final AuctionContext result = target.fromRequest(routingContext, 0L).result();
+
+        // then
+        assertThat(result.getPrebidErrors()).isEmpty();
+    }
+
+    @Test
+    public void shouldAddErrorToAuctionContextWhenConsentTypeIsInvalid() {
+        // given
+        routingContext.queryParams().add("consent_type", "invalid");
+
+        givenBidRequest();
+
+        // when
+        final AuctionContext result = target.fromRequest(routingContext, 0L).result();
+
+        // then
+        assertThat(result.getPrebidErrors())
+                .containsExactly("Invalid consent_type param passed");
+    }
+
+    @Test
+    public void shouldAddErrorToAuctionContextWhenConsentStringQueryParamIsInvalid() {
+        // given
+        routingContext.queryParams().add("consent_string", "consent-value");
+
+        givenBidRequest();
+
+        // when
+        final AuctionContext result = target.fromRequest(routingContext, 0L).result();
+
+        // then
+        assertThat(result.getPrebidErrors())
+                .containsExactly("Amp request parameter consent_string has invalid format: consent-value");
+    }
+
+    @Test
+    public void shouldAddErrorToAuctionContextWhenGdprConsentQueryParamIsInvalid() {
+        // given
+        routingContext.queryParams().add("gdpr_consent", "consent-value");
+
+        givenBidRequest();
+
+        // when
+        final AuctionContext result = target.fromRequest(routingContext, 0L).result();
+
+        // then
+        assertThat(result.getPrebidErrors())
+                .containsExactly("Amp request parameter gdpr_consent has invalid format: consent-value");
     }
 
     @Test
@@ -1429,19 +1376,7 @@ public class AmpRequestFactoryTest extends VertxTest {
 
         // then
         assertThat(result.getRegs())
-                .isEqualTo(Regs.of(null, ExtRegs.of(0, null)));
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutRegsIfGdprAppliesIsNotPresent() {
-        // given
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getRegs()).isNull();
+                .isEqualTo(Regs.builder().gdpr(0).build());
     }
 
     @Test
@@ -1456,11 +1391,11 @@ public class AmpRequestFactoryTest extends VertxTest {
 
         // then
         assertThat(result.getRegs())
-                .isEqualTo(Regs.of(null, ExtRegs.of(null, "1N--")));
+                .isEqualTo(Regs.builder().usPrivacy("1N--").build());
     }
 
     @Test
-    public void shouldReturnBidRequestWithRegsExtUsPrivacyWhenConsentStringIsValidAndConsentTypeIsNotPresent() {
+    public void shouldReturnBidRequestWithRegsExtUsPrivacyWhenConsentTypeIsNotPresent() {
         // given
         routingContext.queryParams().add("consent_string", "1Y-N");
 
@@ -1471,7 +1406,7 @@ public class AmpRequestFactoryTest extends VertxTest {
 
         // then
         assertThat(result.getRegs())
-                .isEqualTo(Regs.of(null, ExtRegs.of(null, "1Y-N")));
+                .isEqualTo(Regs.builder().usPrivacy("1Y-N").build());
     }
 
     @Test
@@ -1488,15 +1423,85 @@ public class AmpRequestFactoryTest extends VertxTest {
 
         // then
         assertThat(result.getRegs())
-                .isEqualTo(Regs.of(null, ExtRegs.of(null, "1Y-N")));
+                .isEqualTo(Regs.builder().usPrivacy("1Y-N").build());
     }
 
     @Test
-    public void shouldReturnBidRequestWithoutRegsExtUsPrivacyWhenConsentStringIsValidAndConsentTypeIsTcfV1() {
+    public void shouldReturnBidRequestWithRegsGppWhenConsentStringIsPresentAndConsentTypeIsGpp() {
         // given
         routingContext.queryParams()
-                .add("consent_string", "1Y-N")
-                .add("consent_type", "1");
+                .add("consent_string", "someGppString")
+                .add("consent_type", "4");
+
+        givenBidRequest();
+
+        // when
+        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
+
+        // then
+        assertThat(result.getRegs())
+                .isEqualTo(Regs.builder().gpp("someGppString").build());
+    }
+
+    @Test
+    public void shouldReturnBidRequestWithRegsGppSidWhenGppSidParameterPresentAndCanBeParsed() {
+        // given
+        routingContext.queryParams().add("gpp_sid", "1,2,3");
+
+        givenBidRequest();
+
+        // when
+        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
+
+        // then
+        assertThat(result.getRegs())
+                .isEqualTo(Regs.builder().gppSid(List.of(1, 2, 3)).build());
+    }
+
+    @Test
+    public void shouldPopulateRegsObjectWithGppDataIfGppSidCouldBeParsed() {
+        // given
+        routingContext.queryParams()
+                .add("consent_string", "someGppString")
+                .add("consent_type", "4")
+                .add("gpp_sid", "1,2,3");
+
+        givenBidRequest();
+
+        // when
+        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
+
+        // then
+        assertThat(result.getRegs())
+                .isEqualTo(Regs.builder()
+                        .gpp("someGppString")
+                        .gppSid(List.of(1, 2, 3))
+                        .build());
+    }
+
+    @Test
+    public void shouldReturnBidRequestWithGpc() {
+        // given
+        given(implicitParametersExtractor.gpcFrom(any())).willReturn("1");
+
+        givenBidRequest();
+
+        // when
+        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
+
+        // then
+        assertThat(result.getRegs()).isEqualTo(Regs.builder()
+                .ext(ExtRegs.of(null, null, "1"))
+                .build());
+    }
+
+    @Test
+    public void shouldNotPopulateRegsObjectWithGppDataIfGppSidCouldNotBeParsed() {
+        // given
+        routingContext.queryParams()
+                .add("consent_string", "someGppString")
+                .add("consent_type", "4")
+                .add("gpp_sid", "1,2,ab");
 
         givenBidRequest();
 
@@ -1507,39 +1512,6 @@ public class AmpRequestFactoryTest extends VertxTest {
         assertThat(result.getRegs()).isNull();
     }
 
-    @Test
-    public void shouldReturnBidRequestWithoutRegsExtUsPrivacyWhenConsentStringIsValidAndConsentTypeIsTcfV2() {
-        // given
-        routingContext.queryParams()
-                .add("consent_string", "1Y-N")
-                .add("consent_type", "2");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getRegs()).isNull();
-    }
-
-    @Test
-    public void shouldReturnBidRequestWithoutRegsExtUsPrivacyWhenConsentStringIsValidAndConsentTypeIsUnknown() {
-        // given
-        routingContext.queryParams()
-                .add("consent_string", "1Y-N")
-                .add("consent_type", "23");
-
-        givenBidRequest();
-
-        // when
-        final BidRequest result = target.fromRequest(routingContext, 0L).result().getBidRequest();
-
-        // then
-        assertThat(result.getRegs()).isNull();
-    }
-
-    @SuppressWarnings("unchecked")
     @Test
     public void shouldReturnBidRequestWithCreatedExtPrebidAmpData() {
         // given
@@ -1571,7 +1543,7 @@ public class AmpRequestFactoryTest extends VertxTest {
         givenBidRequest();
 
         final BidRequest updatedBidRequest = defaultBidRequest.toBuilder().id("updated").build();
-        given(ortb2ImplicitParametersResolver.resolve(any(), any(), any(), any()))
+        given(ortb2ImplicitParametersResolver.resolve(any(), any(), any(), anyBoolean()))
                 .willReturn(updatedBidRequest);
 
         // when
@@ -1588,9 +1560,15 @@ public class AmpRequestFactoryTest extends VertxTest {
 
         final GeoInfo geoInfo = GeoInfo.builder().vendor("vendor").city("found").build();
         final PrivacyContext privacyContext = PrivacyContext.of(
-                Privacy.of("1", "consent", Ccpa.EMPTY, 0),
+                Privacy.builder()
+                        .gdpr("1")
+                        .consentString("consent")
+                        .ccpa(Ccpa.EMPTY)
+                        .coppa(0)
+                        .build(),
                 TcfContext.builder().geoInfo(geoInfo).build());
-        given(privacyEnforcementService.contextFromBidRequest(any()))
+
+        given(ampPrivacyContextFactory.contextFrom(any()))
                 .willReturn(Future.succeededFuture(privacyContext));
 
         // when
@@ -1660,6 +1638,50 @@ public class AmpRequestFactoryTest extends VertxTest {
         assertThat(future).succeededWith(auctionContext);
     }
 
+    @Test
+    public void shouldConvertBidRequestToInternalOpenRTBVersion() {
+        // given
+        givenBidRequest();
+
+        given(ortbVersionConversionManager.convertToAuctionSupportedVersion(any())).willAnswer(
+                invocation -> ((BidRequest) invocation.getArgument(0))
+                        .toBuilder()
+                        .source(Source.builder().tid("uniqTid").build())
+                        .build());
+
+        // when
+        final Future<AuctionContext> future = target.fromRequest(routingContext, 0L);
+
+        // then
+        assertThat(future).isSucceeded();
+        assertThat(future.result())
+                .extracting(AuctionContext::getBidRequest)
+                .extracting(BidRequest::getSource)
+                .isEqualTo(Source.builder().tid("uniqTid").build());
+    }
+
+    @Test
+    public void shouldUpdateTimeout() {
+        // given
+        givenBidRequest();
+
+        given(ortb2RequestFactory.updateTimeout(any(), anyLong()))
+                .willAnswer(invocation -> {
+                    final AuctionContext auctionContext = invocation.getArgument(0);
+                    return auctionContext.with(auctionContext.getBidRequest().toBuilder().tmax(10000L).build());
+                });
+
+        // when
+        final Future<AuctionContext> future = target.fromRequest(routingContext, 0L);
+
+        // then
+        assertThat(future).isSucceeded();
+        assertThat(future.result())
+                .extracting(AuctionContext::getBidRequest)
+                .extracting(BidRequest::getTmax)
+                .isEqualTo(10000L);
+    }
+
     private void givenBidRequest(
             Function<BidRequest.BidRequestBuilder, BidRequest.BidRequestBuilder> storedBidRequestBuilderCustomizer,
             Imp... imps) {
@@ -1679,9 +1701,10 @@ public class AmpRequestFactoryTest extends VertxTest {
                         .build());
         given(ortb2RequestFactory.fetchAccount(any())).willReturn(Future.succeededFuture());
 
-        given(ortb2ImplicitParametersResolver.resolve(any(), any(), any(), any())).willAnswer(
+        given(ortb2ImplicitParametersResolver.resolve(any(), any(), any(), anyBoolean())).willAnswer(
                 answerWithFirstArgument());
-        given(ortb2RequestFactory.validateRequest(any())).willAnswer(answerWithFirstArgument());
+        given(ortb2RequestFactory.validateRequest(any(), any(), any()))
+                .willAnswer(invocation -> Future.succeededFuture((BidRequest) invocation.getArgument(0)));
 
         given(ortb2RequestFactory.enrichBidRequestWithAccountAndPrivacyData(any()))
                 .willAnswer(invocation -> ((AuctionContext) invocation.getArgument(0)).getBidRequest());

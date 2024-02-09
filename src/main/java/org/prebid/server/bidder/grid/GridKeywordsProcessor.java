@@ -5,10 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.commons.lang3.StringUtils;
+import org.prebid.server.bidder.grid.model.request.KeywordSegment;
+import org.prebid.server.bidder.grid.model.request.Keywords;
+import org.prebid.server.bidder.grid.model.request.KeywordsPublisherItem;
 import org.prebid.server.json.JacksonMapper;
-import org.prebid.server.bidder.grid.model.KeywordSegment;
-import org.prebid.server.bidder.grid.model.Keywords;
-import org.prebid.server.bidder.grid.model.KeywordsPublisherItem;
 import org.prebid.server.util.ObjectUtil;
 
 import java.util.ArrayList;
@@ -21,13 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class GridKeywordsProcessor {
 
     private static final TypeReference<Map<String, JsonNode>> MAP_TYPE_REF =
-            new TypeReference<Map<String, JsonNode>>() {
+            new TypeReference<>() {
             };
     private static final String KEYWORDS_PROPERTY = "keywords";
     private static final String USER_PROPERTY = "user";
@@ -77,7 +76,7 @@ public class GridKeywordsProcessor {
         final List<KeywordSegment> segments = Arrays.stream(keywords.split(","))
                 .filter(StringUtils::isNotEmpty)
                 .map(keyword -> KeywordSegment.of(KEYWORDS_PROPERTY, keyword))
-                .collect(Collectors.toList());
+                .toList();
 
         final ObjectNode publisherNode = mapper.mapper().createObjectNode();
         if (!segments.isEmpty()) {
@@ -170,7 +169,7 @@ public class GridKeywordsProcessor {
                 .filter(publisherEntry -> isArrayNode(publisherEntry.getValue()))
                 .map(GridKeywordsProcessor::mapPublisherEntryToKeywordSegmentList)
                 .flatMap(Collection::stream)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private static List<KeywordSegment> mapPublisherEntryToKeywordSegmentList(

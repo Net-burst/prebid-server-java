@@ -11,7 +11,6 @@ import org.prebid.server.hooks.v1.bidder.BidderRequestHook;
 import org.prebid.server.hooks.v1.bidder.BidderRequestPayload;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 public class SampleItBidderRequestHook implements BidderRequestHook {
 
@@ -21,7 +20,7 @@ public class SampleItBidderRequestHook implements BidderRequestHook {
 
         final BidRequest originalBidRequest = bidderRequestPayload.bidRequest();
 
-        final BidRequest updatedBidRequest = updateBidRequest(originalBidRequest, invocationContext);
+        final BidRequest updatedBidRequest = updateBidRequest(originalBidRequest);
 
         return Future.succeededFuture(InvocationResultImpl.succeeded(payload ->
                 BidderRequestPayloadImpl.of(payload.bidRequest().toBuilder()
@@ -34,12 +33,10 @@ public class SampleItBidderRequestHook implements BidderRequestHook {
         return "bidder-request";
     }
 
-    private BidRequest updateBidRequest(
-            BidRequest originalBidRequest, BidderInvocationContext bidderInvocationContext) {
-
+    private BidRequest updateBidRequest(BidRequest originalBidRequest) {
         final List<Imp> updatedImps = originalBidRequest.getImp().stream()
                 .map(imp -> imp.toBuilder().tagid("tagid-from-bidder-request-hook").build())
-                .collect(Collectors.toList());
+                .toList();
 
         return originalBidRequest.toBuilder()
                 .imp(updatedImps)

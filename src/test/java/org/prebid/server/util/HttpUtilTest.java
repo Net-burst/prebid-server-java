@@ -163,26 +163,12 @@ public class HttpUtilTest {
                 .containsOnly(entry("name", "value"));
     }
 
-    @Test
-    public void toSetCookieHeaderValueShouldReturnExpectedString() {
-        // given
-        final Cookie cookie = Cookie.cookie("cookie", "value")
-                .setPath("/")
-                .setDomain("domain.com");
-
-        // when
-        final String setCookieHeaderValue = HttpUtil.toSetCookieHeaderValue(cookie);
-
-        // then
-        assertThat(setCookieHeaderValue).isEqualTo("cookie=value; Path=/; Domain=domain.com; SameSite=None; Secure");
-    }
-
     @SuppressWarnings("unchecked")
     @Test
     public void executeSafelyShouldSkipResponseIfClientClosedConnection() {
         // given
         given(httpResponse.closed()).willReturn(true);
-        final Consumer responseConsumer = mock(Consumer.class);
+        final Consumer<HttpServerResponse> responseConsumer = mock(Consumer.class);
 
         // when
         HttpUtil.executeSafely(routingContext, "endpoint", responseConsumer);
@@ -195,7 +181,7 @@ public class HttpUtilTest {
     @Test
     public void executeSafelyShouldRespondToClient() {
         // given
-        final Consumer responseConsumer = mock(Consumer.class);
+        final Consumer<HttpServerResponse> responseConsumer = mock(Consumer.class);
 
         // when
         final boolean result = HttpUtil.executeSafely(routingContext, "endpoint", responseConsumer);
@@ -209,7 +195,7 @@ public class HttpUtilTest {
     @Test
     public void executeSafelyShouldReturnFalseIfResponseFailed() {
         // given
-        final Consumer responseConsumer = mock(Consumer.class);
+        final Consumer<HttpServerResponse> responseConsumer = mock(Consumer.class);
         doThrow(new RuntimeException("error")).when(responseConsumer).accept(any());
 
         // when

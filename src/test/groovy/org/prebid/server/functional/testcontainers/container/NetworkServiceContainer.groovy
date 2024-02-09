@@ -2,11 +2,13 @@ package org.prebid.server.functional.testcontainers.container
 
 import org.testcontainers.containers.MockServerContainer
 import org.testcontainers.containers.Network
+import org.testcontainers.utility.DockerImageName
 
 class NetworkServiceContainer extends MockServerContainer {
 
     NetworkServiceContainer(String version) {
-        super(version)
+        super(DockerImageName.parse("mockserver/mockserver:mockserver-$version"))
+        withCommand("-serverPort $PORT -logLevel WARN")
     }
 
     String getHostAndPort() {
@@ -14,7 +16,7 @@ class NetworkServiceContainer extends MockServerContainer {
     }
 
     String getRootUri() {
-        "http://${getHostAndPort()}"
+        "http://${hostAndPort}"
     }
 
     @Override
